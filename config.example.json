@@ -1,0 +1,14 @@
+{
+  "api_key": "RGAPI-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "platform": "na1",
+  "riot_ids": [
+    "Player1#NA1",
+    "Player2#NA1",
+    "Player3#NA1",
+    "Player4#NA1",
+    "Player5#NA1",
+    "Player6#NA1"
+  ],
+  "matches_per_player": 60,
+  "queue": 420
+}
