@@ -217,6 +217,9 @@ def main():
     (DATA / "players.json").write_text(json.dumps(out))
     print(f"Wrote data/players.json ({len(players)} players, {len(matches)} matches).")
 
+    import compute_profiles
+    compute_profiles.main()
+
 
 if __name__ == "__main__":
     main()
