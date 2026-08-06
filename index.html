@@ -69,7 +69,7 @@
   .chip b { color: var(--gold-soft); font-weight: 600; }
 
   /* ---- layout ---- */
-  .layout { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+  .layout { display: grid; grid-template-columns: 370px 1fr; gap: 20px; align-items: start; }
   @media (max-width: 940px) { .layout { grid-template-columns: 1fr; } }
 
   .card {
@@ -102,9 +102,10 @@
     border: 2px solid rgba(227,177,63,0.35);
   }
   .player .who { flex: 1; min-width: 0; }
-  .player .name { font-size: 14px; font-weight: 650; letter-spacing: 0.01em; }
-  .player .tag { font-size: 11px; color: var(--ink-muted); }
-  .qsplit { text-align: right; font-size: 11.5px; line-height: 1.55; color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .player .name { display: block; font-size: 14px; font-weight: 650; letter-spacing: 0.01em;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .player .tag { display: block; font-size: 11px; color: var(--ink-muted); }
+  .qsplit { flex: none; text-align: right; font-size: 11.5px; line-height: 1.55; color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .qsplit .q { color: var(--gold-soft); font-weight: 600; font-size: 10px; letter-spacing: 0.08em; }
 
   /* ---- buttons ---- */
@@ -582,7 +583,7 @@ function render() {
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><br><span class="tag">#${tag || ""}</span></span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span></span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
