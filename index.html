@@ -80,6 +80,10 @@
                box-shadow: 0 4px 14px rgba(0,0,0,.25); }
   .info:hover .tip, .info:focus .tip { display: block; }
   .empty { padding: 40px; text-align: center; color: var(--ink-muted); }
+  .tabs { display: inline-flex; gap: 4px; margin-left: 14px; vertical-align: middle; }
+  .tabs button { background: none; border: 1px solid var(--baseline); color: var(--ink-2);
+                 border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
+  .tabs button.active { background: var(--series-1); border-color: var(--series-1); color: #fff; }
   code { background: var(--grid); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
@@ -362,7 +366,12 @@ function render() {
         </div>
         <div class="roles" id="slots"></div>
         <div class="card" style="margin-top:16px">
-          <h2>Top compositions</h2>
+          <h2 style="display:flex; align-items:center">Top compositions
+            <span class="tabs">
+              <button id="tabAssigned">Roles as set</button>
+              <button id="tabOverall">Best overall</button>
+            </span>
+          </h2>
           <div id="ranked"><div class="empty">Run the optimizer.</div></div>
         </div>
       </div>
@@ -371,6 +380,8 @@ function render() {
     cb.addEventListener("change", e => { included[e.target.dataset.player] = e.target.checked; }));
   $("#opt").addEventListener("click", runOptimize);
   $("#optChamps").addEventListener("click", runOptimizeChamps);
+  $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
+  $("#tabOverall").addEventListener("click", () => switchTab("overall"));
   renderSlots();
   renderScore();
 }
@@ -423,6 +434,7 @@ function renderSlots() {
     const i = +e.target.dataset.slot;
     if (e.target.dataset.kind === "player") { slots[i].player = e.target.value || null; slots[i].champ = null; }
     else slots[i].champ = e.target.value ? +e.target.value : null;
+    rankedTabs.assigned = null;  // role assignment changed — stale
     renderSlots(); renderScore();
   }));
 }
@@ -455,8 +467,34 @@ function renderScore() {
     `hot streaks inflate both.</span></span>`;
 }
 
+// Two result sets: champs-only for the roles set in the slots, and the full
+// role-agnostic search. Tabs switch the view without touching the slots.
+const rankedTabs = { assigned: null, overall: null };
+let activeTab = "overall";
+
+function switchTab(tab) {
+  activeTab = tab;
+  if (!rankedTabs[tab]) {
+    const res = tab === "overall" ? optimize(10) : optimizeChamps(10);
+    rankedTabs[tab] = res && res.length ? res : null;
+  }
+  renderTabs();
+}
+
+function renderTabs() {
+  $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
+  $("#tabOverall").classList.toggle("active", activeTab === "overall");
+  const results = rankedTabs[activeTab];
+  if (!results) {
+    $("#ranked").innerHTML = `<div class="empty">${activeTab === "assigned"
+      ? "Assign a distinct player to all five roles above, then press “Optimize champs”."
+      : "Check at least 5 players and press “Optimize comp”."}</div>`;
+    return;
+  }
+  renderRanked(results);
+}
+
 function renderRanked(results) {
-  applyComp(results[0]);
   $("#ranked").innerHTML = `<table>
     <tr><th>#</th>
     <th>Win rate<span class="info" tabindex="0">i<span class="tip">
@@ -483,21 +521,18 @@ function renderRanked(results) {
 }
 
 function runOptimize() {
-  const top = optimize(10);
-  if (!top.length) {
-    $("#ranked").innerHTML = `<div class="empty">Need at least 5 players checked.</div>`;
-    return;
-  }
-  renderRanked(top);
+  rankedTabs.overall = optimize(10);
+  if (!rankedTabs.overall.length) rankedTabs.overall = null;
+  else applyComp(rankedTabs.overall[0]);
+  activeTab = "overall";
+  renderTabs();
 }
 
 function runOptimizeChamps() {
-  const top = optimizeChamps(10);
-  if (!top) {
-    $("#ranked").innerHTML = `<div class="empty">Assign a distinct player to all five roles first (the player dropdown on each card).</div>`;
-    return;
-  }
-  renderRanked(top);
+  rankedTabs.assigned = optimizeChamps(10);
+  if (rankedTabs.assigned) applyComp(rankedTabs.assigned[0]);
+  activeTab = "assigned";
+  renderTabs();
 }
 
 function applyComp(r) {
