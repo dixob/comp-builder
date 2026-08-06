@@ -2,3 +2,4 @@ config.json
 fetch.log
 data/matches/
 .DS_Store
+.claude/

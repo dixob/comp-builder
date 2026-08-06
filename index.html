@@ -4,93 +4,308 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Comp Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&display=swap" rel="stylesheet">
 <style>
-  .viz-root {
-    color-scheme: light;
-    --surface-1: #fcfcfb; --page: #f9f9f7;
-    --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
-    --grid: #e1e0d9; --baseline: #c3c2b7; --ring: rgba(11,11,11,0.10);
-    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
-    --good-text: #006300; --bad-text: #d03b3b;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:where(:not([data-theme="light"])) .viz-root {
-      color-scheme: dark;
-      --surface-1: #1a1a19; --page: #0d0d0d;
-      --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
-      --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
-      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
-      --good-text: #0ca30c; --bad-text: #e66767;
-    }
-  }
-  :root[data-theme="dark"] .viz-root {
+  /* Committed dark theme — this is a draft-lobby tool, it lives in the dark. */
+  :root {
     color-scheme: dark;
-    --surface-1: #1a1a19; --page: #0d0d0d;
-    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
-    --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
-    --good-text: #0ca30c; --bad-text: #e66767;
+    --page: #0b0f17;
+    --surface: #131a24;
+    --surface-2: #1a2331;
+    --ink-1: #e7edf5;
+    --ink-2: #b6c2d2;
+    --ink-muted: #9aa7b8;
+    --line: #232e3e;
+    --line-soft: #1b2432;
+    --gold: #e3b13f;
+    --gold-soft: #e8c98a;
+    --gold-dim: rgba(227, 177, 63, 0.14);
+    --good: #4ade80;
+    --bad: #f4737e;
+    --good-dim: rgba(74, 222, 128, 0.12);
+    --bad-dim: rgba(244, 115, 126, 0.12);
+    --radius: 14px;
+    --display: "Cinzel", "Palatino", serif;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  .viz-root { background: var(--page); color: var(--ink-1); min-height: 100vh; padding: 24px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 14px; margin: 0 0 10px; color: var(--ink-2); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-  .sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 20px; }
-  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
-  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
-  .card { background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  .player { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
-  .player:hover { background: var(--grid); }
-  .player input { accent-color: var(--series-1); }
-  .player .name { font-size: 14px; font-weight: 600; flex: 1; }
-  .player .meta { font-size: 12px; color: var(--ink-muted); }
-  .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
-  @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); } }
-  .slot { background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 12px; }
-  .slot h3 { margin: 0 0 8px; font-size: 12px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .05em; }
-  .slot select { width: 100%; margin-bottom: 6px; font-size: 13px; padding: 4px; background: var(--page); color: var(--ink-1); border: 1px solid var(--baseline); border-radius: 6px; }
-  .slot img { width: 48px; height: 48px; border-radius: 8px; display: block; margin: 6px auto; }
-  .slot .cstat { font-size: 12px; color: var(--ink-2); text-align: center; }
-  .hero { display: flex; align-items: baseline; gap: 12px; }
-  .hero .num { font-size: 44px; font-weight: 700; }
-  .hero .lbl { font-size: 13px; color: var(--ink-muted); }
-  .meter { height: 8px; background: var(--grid); border-radius: 4px; margin-top: 10px; overflow: hidden; }
-  .meter > div { height: 100%; background: var(--series-1); border-radius: 4px; transition: width .3s; }
-  .btn { background: var(--series-1); color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
-  .btn:hover { filter: brightness(1.1); }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--ink-muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--baseline); }
-  td { padding: 7px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  html { scrollbar-gutter: stable; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(1100px 500px at 70% -10%, rgba(227,177,63,0.07), transparent 60%),
+      radial-gradient(900px 600px at -10% 110%, rgba(45,120,214,0.05), transparent 55%),
+      var(--page);
+    color: var(--ink-1);
+    min-height: 100vh;
+  }
+  .shell { max-width: 1280px; margin: 0 auto; padding: 28px 24px 60px; }
+
+  /* ---- header ---- */
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 26px; flex-wrap: wrap; }
+  .sigil {
+    width: 44px; height: 44px; flex: none;
+    display: grid; place-items: center;
+    background: linear-gradient(160deg, #1c2534, #10161f);
+    border: 1px solid var(--gold); border-radius: 12px;
+    box-shadow: 0 0 18px rgba(227,177,63,0.18), inset 0 0 12px rgba(227,177,63,0.08);
+  }
+  .sigil svg { color: var(--gold); }
+  h1 {
+    font-family: var(--display);
+    font-size: 26px; font-weight: 700; letter-spacing: 0.06em;
+    margin: 0; line-height: 1.1;
+  }
+  .tagline { font-size: 13px; color: var(--ink-muted); margin-top: 2px; }
+  .patchbar { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    font-size: 12px; color: var(--ink-2);
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px 11px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .chip b { color: var(--gold-soft); font-weight: 600; }
+
+  /* ---- layout ---- */
+  .layout { display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 940px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: linear-gradient(180deg, var(--surface), #111823);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 18px;
+  }
+  h2 {
+    font-family: var(--display);
+    font-size: 13px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--gold-soft); margin: 0 0 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+  .hint { color: var(--ink-muted); font-size: 12.5px; line-height: 1.5; }
+
+  /* ---- players ---- */
+  .player {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 10px; border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent; transition: background .15s, border-color .15s;
+  }
+  .player:hover { background: var(--surface-2); border-color: var(--line-soft); }
+  .player input {
+    accent-color: var(--gold); width: 15px; height: 15px; flex: none; cursor: pointer;
+  }
+  .avatar {
+    width: 34px; height: 34px; flex: none; border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid rgba(227,177,63,0.35);
+  }
+  .player .who { flex: 1; min-width: 0; }
+  .player .name { font-size: 14px; font-weight: 650; letter-spacing: 0.01em; }
+  .player .tag { font-size: 11px; color: var(--ink-muted); }
+  .qsplit { text-align: right; font-size: 11.5px; line-height: 1.55; color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .qsplit .q { color: var(--gold-soft); font-weight: 600; font-size: 10px; letter-spacing: 0.08em; }
+
+  /* ---- buttons ---- */
+  .btn {
+    font: inherit; font-weight: 700; font-size: 14px;
+    color: #171004;
+    background: linear-gradient(180deg, #efc25d, #d9a32f);
+    border: 1px solid #f0cd7e; border-radius: 10px;
+    padding: 11px 20px; cursor: pointer;
+    box-shadow: 0 2px 10px rgba(227,177,63,0.25), inset 0 1px 0 rgba(255,255,255,0.35);
+    transition: transform .1s, box-shadow .15s, filter .15s;
+  }
+  .btn:hover { filter: brightness(1.07); box-shadow: 0 3px 16px rgba(227,177,63,0.4), inset 0 1px 0 rgba(255,255,255,0.35); }
+  .btn:active { transform: translateY(1px) scale(0.99); box-shadow: 0 1px 4px rgba(227,177,63,0.2); }
+  .btn.full { width: 100%; margin-top: 14px; }
+
+  /* ---- win-rate hero ---- */
+  .hero-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .hero-num {
+    font-size: 52px; font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .verdict {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase;
+    border-radius: 999px; padding: 5px 12px;
+    background: var(--surface-2); color: var(--ink-muted); border: 1px solid var(--line);
+  }
+  .verdict.good { background: var(--good-dim); color: var(--good); border-color: rgba(74,222,128,0.3); }
+  .verdict.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,115,126,0.3); }
+  .verdict.gold { background: var(--gold-dim); color: var(--gold-soft); border-color: rgba(227,177,63,0.35); }
+  .meter {
+    position: relative; height: 10px; margin-top: 14px;
+    background: var(--surface-2); border-radius: 5px; overflow: hidden;
+    border: 1px solid var(--line-soft);
+  }
+  .meter .fill {
+    height: 100%; width: 0;
+    background: linear-gradient(90deg, #b98a25, var(--gold), #f2d287);
+    border-radius: 5px;
+    box-shadow: 0 0 10px rgba(227,177,63,0.5);
+    transition: width .5s cubic-bezier(.22,1,.36,1);
+  }
+  .meter .tick {
+    position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+    background: var(--ink-muted); opacity: 0.55;
+  }
+  .breakdown { font-size: 13px; color: var(--ink-2); line-height: 1.9; margin-top: 12px; }
+  .pos { color: var(--good); font-weight: 650; }
+  .neg { color: var(--bad); font-weight: 650; }
+
+  /* ---- draft board ---- */
+  .board-head { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .board-head .hint { flex: 1; min-width: 220px; margin: 0; }
+  .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }
+  .slot {
+    background: linear-gradient(180deg, var(--surface), #111823);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 12px; text-align: center;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .slot.filled { border-color: rgba(227,177,63,0.35); box-shadow: 0 0 14px rgba(227,177,63,0.07); }
+  .slot h3 {
+    margin: 0 0 10px; font-family: var(--display);
+    font-size: 12px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-2);
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  .slot h3 svg { color: var(--gold); flex: none; }
+  select {
+    width: 100%; font: inherit; font-size: 13px;
+    padding: 7px 8px; margin-bottom: 7px;
+    background: var(--surface-2); color: var(--ink-1);
+    border: 1px solid var(--line); border-radius: 8px;
+    cursor: pointer; transition: border-color .15s;
+  }
+  select:hover:not(:disabled) { border-color: var(--gold); }
+  select:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+  select:disabled { opacity: 0.45; cursor: not-allowed; }
+  .portrait-wrap { position: relative; width: 64px; margin: 10px auto 8px; }
+  .portrait {
+    width: 64px; height: 64px; border-radius: 12px; display: block;
+    border: 2px solid var(--gold);
+    box-shadow: 0 0 14px rgba(227,177,63,0.3);
+  }
+  .portrait-empty {
+    width: 64px; height: 64px; border-radius: 12px; margin: 10px auto 8px;
+    border: 2px dashed var(--line); display: grid; place-items: center;
+    color: var(--line); font-size: 22px;
+  }
+  .cstat { font-size: 12px; color: var(--ink-2); line-height: 1.7; }
+  .cstat .dim { color: var(--ink-muted); }
+  .scorechip {
+    display: inline-block; margin-top: 7px;
+    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+    color: var(--gold-soft); background: var(--gold-dim);
+    border: 1px solid rgba(227,177,63,0.3); border-radius: 999px; padding: 3px 11px;
+  }
+
+  /* ---- top comps ---- */
+  .tabs { display: inline-flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+  .tabs button {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    background: none; border: none; color: var(--ink-muted);
+    border-radius: 999px; padding: 5px 14px; transition: color .15s, background .15s;
+  }
+  .tabs button:hover { color: var(--ink-1); }
+  .tabs button.active { background: var(--gold); color: #171004; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0 6px; font-size: 13px; }
+  th {
+    text-align: left; color: var(--ink-muted); font-weight: 500; font-size: 11.5px;
+    letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 10px;
+  }
+  td { padding: 9px 10px; background: var(--surface-2); font-variant-numeric: tabular-nums; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+  td:first-child { border-radius: 10px 0 0 10px; border-left: 1px solid var(--line-soft); }
+  td:last-child { border-radius: 0 10px 10px 0; border-right: 1px solid var(--line-soft); }
   tr.comp-row { cursor: pointer; }
-  tr.comp-row:hover { background: var(--grid); }
-  .wr-cell { display: flex; align-items: center; gap: 8px; }
-  .wr-bar { flex: 1; max-width: 120px; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
-  .wr-bar > div { height: 100%; background: var(--series-1); border-radius: 3px; }
-  .champ-icons img { width: 26px; height: 26px; border-radius: 5px; margin-right: 3px; vertical-align: middle; }
-  .breakdown { font-size: 13px; color: var(--ink-2); line-height: 1.7; }
-  .pos { color: var(--good-text); } .neg { color: var(--bad-text); }
-  .info { position: relative; display: inline-block; cursor: help; color: var(--ink-muted);
-          border: 1px solid var(--baseline); border-radius: 50%; width: 14px; height: 14px;
-          font-size: 10px; line-height: 14px; text-align: center; margin-left: 5px; vertical-align: 1px; }
-  .info .tip { display: none; position: absolute; z-index: 10; left: 50%; transform: translateX(-50%);
-               bottom: 22px; width: 260px; background: var(--surface-1); color: var(--ink-2);
-               border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px;
-               font-size: 12px; line-height: 1.5; font-weight: 400; text-align: left;
-               box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  tr.comp-row td { transition: background .15s, border-color .15s; }
+  tr.comp-row:hover td { background: #202b3c; border-color: rgba(227,177,63,0.4); }
+  tr.comp-row { animation: rise .35s cubic-bezier(.22,1,.36,1) both; animation-delay: calc(var(--i) * 45ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+  .rank {
+    display: inline-grid; place-items: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    font-size: 12px; font-weight: 800;
+    background: var(--surface); color: var(--ink-muted); border: 1px solid var(--line);
+  }
+  .rank.r1 { background: linear-gradient(160deg, #f2d287, #d9a32f); color: #171004; border-color: #f0cd7e; box-shadow: 0 0 8px rgba(227,177,63,0.5); }
+  .rank.r2 { background: linear-gradient(160deg, #dbe3ec, #9fadbf); color: #10141c; border-color: #dbe3ec; }
+  .rank.r3 { background: linear-gradient(160deg, #d8a173, #a96b3c); color: #1c0f04; border-color: #d8a173; }
+  .wr-cell { display: flex; align-items: center; gap: 10px; }
+  .wr-cell b { font-size: 13.5px; }
+  .wr-bar { flex: 1; max-width: 110px; height: 6px; background: var(--page); border-radius: 3px; overflow: hidden; }
+  .wr-bar > div { height: 100%; background: linear-gradient(90deg, #b98a25, var(--gold)); border-radius: 3px; }
+  .champ-icons { white-space: nowrap; }
+  .ci { position: relative; display: inline-block; margin-right: 4px; vertical-align: middle; }
+  .ci img {
+    width: 32px; height: 32px; border-radius: 7px; display: block;
+    border: 1px solid var(--line); transition: transform .12s, border-color .12s;
+  }
+  tr.comp-row:hover .ci img { border-color: rgba(227,177,63,0.5); }
+  .ci:hover img { transform: scale(1.25); border-color: var(--gold); }
+  .ci::after {
+    content: attr(data-tip);
+    position: absolute; left: 50%; bottom: calc(100% + 8px);
+    transform: translateX(-50%) translateY(2px);
+    background: var(--surface-2); color: var(--ink-1);
+    border: 1px solid rgba(227,177,63,0.4); border-radius: 8px;
+    padding: 5px 10px; font-size: 12px; font-weight: 650; white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+    opacity: 0; pointer-events: none; z-index: 6;
+    transition: opacity .12s, transform .12s;
+  }
+  .ci:hover::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .syn-chip {
+    display: inline-block; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+    border-radius: 999px; padding: 3px 10px;
+  }
+  .syn-chip.pos { background: var(--good-dim); border: 1px solid rgba(74,222,128,0.3); }
+  .syn-chip.neg { background: var(--bad-dim); border: 1px solid rgba(244,115,126,0.3); }
+
+  /* ---- misc ---- */
+  .empty { padding: 44px 20px; text-align: center; color: var(--ink-muted); font-size: 13.5px; line-height: 1.7; }
+  .empty svg { color: var(--line); margin-bottom: 10px; }
+  .info {
+    position: relative; display: inline-block; cursor: help; color: var(--ink-muted);
+    border: 1px solid var(--line); border-radius: 50%; width: 15px; height: 15px;
+    font-size: 10px; line-height: 14px; text-align: center; margin-left: 6px; vertical-align: 1px;
+    font-style: normal; font-weight: 600; text-transform: none; letter-spacing: 0;
+  }
+  .info:hover, .info:focus { color: var(--gold-soft); border-color: var(--gold); }
+  .info .tip {
+    display: none; position: absolute; z-index: 10; left: 50%; transform: translateX(-50%);
+    bottom: 24px; width: 270px; background: var(--surface-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
+    font-size: 12px; line-height: 1.55; font-weight: 400; text-align: left;
+    letter-spacing: 0; text-transform: none;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
   .info:hover .tip, .info:focus .tip { display: block; }
-  .empty { padding: 40px; text-align: center; color: var(--ink-muted); }
-  .tabs { display: inline-flex; gap: 4px; margin-left: 14px; vertical-align: middle; }
-  .tabs button { background: none; border: 1px solid var(--baseline); color: var(--ink-2);
-                 border-radius: 999px; padding: 3px 12px; font-size: 12px; cursor: pointer; }
-  .tabs button.active { background: var(--series-1); border-color: var(--series-1); color: #fff; }
-  code { background: var(--grid); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+  code { background: var(--surface-2); border: 1px solid var(--line); padding: 2px 7px; border-radius: 6px; font-size: 12px; color: var(--gold-soft); }
+  @media (prefers-reduced-motion: reduce) {
+    tr.comp-row { animation: none; }
+    .meter .fill { transition: none; }
+  }
 </style>
 </head>
 <body>
-<div class="viz-root">
-  <h1>Team Composition Builder</h1>
-  <div class="sub" id="sub">Loading account data…</div>
+<div class="shell">
+  <header>
+    <div class="sigil">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+        <path d="M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z"/>
+        <circle cx="12" cy="12.4" r="3.2" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Comp Builder</h1>
+    </div>
+    <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
+  </header>
   <div id="app"></div>
 </div>
 
@@ -114,6 +329,7 @@ const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role 
 const ROLE_RECORD_MIN_GAMES = 5;     // use the player's champ-in-role record above this sample
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const MASTERY_FLOOR = 30000;         // below this mastery a champ isn't considered a real pick
+const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
 let D = null;           // loaded dataset
 let META = null;        // current-patch meta stats (optional)
@@ -213,11 +429,11 @@ function compScore(assign) {  // assign: [{player, champ, role}]
   return { total: Math.max(0.05, Math.min(0.95, ind + syn)), ind, syn };
 }
 
-// A champion is pickable for (player, role) only if the player has actually
-// played it there, or the current meta plays it there (e.g. no Nunu top —
-// unless Nunu top is genuinely part of the patch's meta).
+// A champion is pickable for (player, role) only if the current meta plays it
+// there, or the player has a REAL personal sample there (a handful of off-meta
+// experiments — e.g. 9 games of Ezreal jungle — doesn't make it a draft pick).
 function roleViable(champEntry, champId, role) {
-  if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= 2) return true;
+  if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= OWN_ROLE_VIABLE_GAMES) return true;
   const m = META && META.champions[champId];
   const pos = m && m.positions[OPGG_POS[role]];
   return !!(pos && pos.games >= 100 && pos.roleRate >= 0.15);
@@ -319,13 +535,39 @@ const champIcon = id => {
 };
 const pct = x => (x * 100).toFixed(1) + "%";
 
+// Real in-game profile icon when the dataset has one (needs a fetch_data.py
+// run that recorded profileIconId); otherwise no avatar at all.
+function avatar(riotId) {
+  const p = D.players.find(p => p.riotId === riotId);
+  if (!p || p.profileIconId == null) return "";
+  const url = `https://ddragon.leagueoflegends.com/cdn/${D.ddragonVersion}/img/profileicon/${p.profileIconId}.png`;
+  return `<img class="avatar" src="${url}" alt="">`;
+}
+
+const ROLE_ICON = {
+  TOP: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h13l-4.5 4.5h-4v4L3 16z"/><path opacity=".35" d="M21 21H8l4.5-4.5h4v-4L21 8z"/></svg>`,
+  JUNGLE: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2c3 3.5 4.4 7.5 4.6 11.5.8-2.3 2.2-4.2 4.4-5.5-1.5 2.6-2.3 5.7-2.3 9L12 21l-1.7-2.5C9.5 13 8.8 7 7 2z"/><path opacity=".55" d="M17.5 4c-1.2 2.2-1.9 4.6-2.1 7.1 1-1.2 2.3-2 3.9-2.4-1.1 1.6-1.8 3.4-2 5.4-.6-3.6-.5-7 .2-10.1z"/></svg>`,
+  MIDDLE: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3h4v4L7 21H3v-4z"/><path opacity=".35" d="M3 3h8L7 7H7v4l-4 4zM21 21h-8l4-4h0v-4l4-4z"/></svg>`,
+  BOTTOM: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 21H8l4.5-4.5h4v-4L21 8z"/><path opacity=".35" d="M3 3h13l-4.5 4.5h-4v4L3 16z"/></svg>`,
+  UTILITY: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l8 3.2V11c0 4.8-3.3 8.7-8 11-4.7-2.3-8-6.2-8-11V5.2z"/></svg>`,
+};
+
+// Verdict thresholds are pure presentation — the score itself is untouched.
+function verdict(total) {
+  if (total >= 0.66) return { label: "Lock it in", cls: "gold" };
+  if (total >= 0.58) return { label: "Favored", cls: "good" };
+  if (total >= 0.52) return { label: "Slight edge", cls: "good" };
+  if (total >= 0.45) return { label: "Coin flip", cls: "" };
+  return { label: "Uphill battle", cls: "bad" };
+}
+
 function render() {
   $("#app").innerHTML = `
     <div class="layout">
       <div>
         <div class="card">
-          <h2>Players</h2>
-          <div class="sub" style="margin-bottom:8px">Optimizer picks the best 5 of those checked.</div>
+          <h2>Squad</h2>
+          <div class="hint" style="margin-bottom:10px">Optimizer picks the best 5 of those checked.</div>
           ${D.players.map(p => {
             const games = p.champions.reduce((a, c) => a + c.games, 0);
             const wins = p.champions.reduce((a, c) => a + c.wins, 0);
@@ -333,28 +575,33 @@ function render() {
             const split = p.queues
               ? Object.entries(p.queues)
                   .sort(([a], [b]) => a - b)
-                  .map(([qid, s]) => `${QUEUE_TAG[qid] || "q" + qid} ${pct(s.wins / s.games)} · ${s.games}g`)
+                  .map(([qid, s]) => `<span class="q">${(QUEUE_TAG[qid] || "q" + qid).toUpperCase()}</span> ${pct(s.wins / s.games)} · ${s.games}g`)
                   .join("<br>")
               : `${games ? pct(wins / games) : "–"} · ${games}g`;
+            const [name, tag] = p.riotId.split("#");
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
-              <span class="name">${p.riotId}</span>
-              <span class="meta" style="text-align:right">${split}</span>
+              ${avatar(p.riotId)}
+              <span class="who"><span class="name">${name}</span><br><span class="tag">#${tag || ""}</span></span>
+              <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
-          <div style="margin-top:12px"><button class="btn" id="opt">Optimize comp</button></div>
+          <button class="btn full" id="opt">Optimize comp</button>
         </div>
         <div class="card">
           <h2>Estimated win rate</h2>
-          <div class="hero"><span class="num" id="hero">–</span><span class="lbl">expected</span></div>
-          <div class="meter"><div id="meter" style="width:0%"></div></div>
-          <div class="breakdown" id="breakdown" style="margin-top:10px"></div>
+          <div class="hero-row">
+            <span class="hero-num" id="hero">–</span>
+            <span class="verdict" id="verdict" hidden></span>
+          </div>
+          <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
+          <div class="breakdown" id="breakdown"></div>
         </div>
       </div>
       <div>
-        <div style="margin-bottom:10px; display:flex; gap:10px; align-items:center">
+        <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
-          <span class="sub" style="margin:0">Set each role's player below, then let the optimizer pick only the champions.
+          <span class="hint">Set each role's player below, then let the optimizer pick only the champions.
             <span class="info" tabindex="0">i<span class="tip">
             Each card's <b>score</b> is that pick's full composite: the player's win rate on the
             champion in that role (their champ-in-role record when they have 5+ games there,
@@ -365,25 +612,51 @@ function render() {
             it belongs to pairs and shows in the breakdown above.</span></span></span>
         </div>
         <div class="roles" id="slots"></div>
-        <div class="card" style="margin-top:16px">
-          <h2 style="display:flex; align-items:center">Top compositions
-            <span class="tabs">
+        <div class="card" style="margin-top:18px">
+          <h2 style="margin-bottom:14px">Top compositions
+            <span class="tabs" style="margin-left:auto">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
             </span>
           </h2>
-          <div id="ranked"><div class="empty">Run the optimizer.</div></div>
+          <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
         </div>
       </div>
     </div>`;
   document.querySelectorAll("[data-player]").forEach(cb =>
-    cb.addEventListener("change", e => { included[e.target.dataset.player] = e.target.checked; }));
+    cb.addEventListener("change", e => {
+      included[e.target.dataset.player] = e.target.checked;
+      rankedTabs.overall = null;  // player pool changed — stale
+      if (activeTab === "overall") switchTab("overall");
+    }));
   $("#opt").addEventListener("click", runOptimize);
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
   renderSlots();
   renderScore();
+}
+
+// Slotting a player is an implicit opt-in: re-check them in the squad list
+// and refresh anything that depends on the player pool.
+function ensureIncluded(rids) {
+  let changed = false;
+  for (const rid of rids) {
+    if (!rid || included[rid]) continue;
+    included[rid] = true;
+    changed = true;
+    const cb = document.querySelector(`[data-player="${CSS.escape(rid)}"]`);
+    if (cb) cb.checked = true;
+  }
+  if (changed) {
+    rankedTabs.overall = null;  // player pool changed — stale
+    if (activeTab === "overall") switchTab("overall");
+  }
+}
+
+function emptyIcon() {
+  return `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z"/><circle cx="12" cy="12.4" r="3.2"/></svg>`;
 }
 
 function renderSlots() {
@@ -395,7 +668,7 @@ function renderSlots() {
     let comfortLine = "";
     if (s.player) {
       const share = playerRoleShare(s.player, role);
-      comfortLine = `<div class="cstat">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
+      comfortLine = `<div class="cstat dim" style="margin-bottom:6px">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
       const p = D.players.find(p => p.riotId === s.player);
       const cands = candidates(s.player, role, 15);
       if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
@@ -414,27 +687,34 @@ function renderSlots() {
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
         const e = p.champions.find(c => c.championId === s.champ);
-        stat = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : "no ranked games";
-        if (META) stat += `<br>meta ${pct(metaWR(s.champ, role))}`;
+        stat = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : `<span class="dim">no ranked games</span>`;
+        if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
         const pts = (masteryIdx[s.player] || {})[s.champ];
-        stat += `<br>mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}`;
-        stat += `<br><b>score ${pct(indScore(s.player, s.champ, role))}</b>`;
+        stat += `<br><span class="dim">mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}</span>`;
+        stat += `<br><span class="scorechip">score ${pct(indScore(s.player, s.champ, role))}</span>`;
       }
     }
-    return `<div class="slot">
-      <h3>${ROLE_LABEL[role]}</h3>
+    return `<div class="slot ${s.champ ? "filled" : ""}">
+      <h3>${ROLE_ICON[role]}${ROLE_LABEL[role]}</h3>
       <select data-slot="${i}" data-kind="player"><option value="">— player —</option>${playerOpts}</select>
       ${comfortLine}
       <select data-slot="${i}" data-kind="champ" ${s.player ? "" : "disabled"}><option value="">— champion —</option>${champOpts}</select>
-      ${s.champ ? `<img src="${champIcon(s.champ)}" alt="${champName(s.champ)}" title="${champName(s.champ)}">` : ""}
+      ${s.champ
+        ? `<div class="portrait-wrap"><img class="portrait" src="${champIcon(s.champ)}" alt="${champName(s.champ)}" title="${champName(s.champ)}"></div>`
+        : `<div class="portrait-empty">?</div>`}
       <div class="cstat">${stat}</div>
     </div>`;
   }).join("");
   document.querySelectorAll("#slots select").forEach(sel => sel.addEventListener("change", e => {
     const i = +e.target.dataset.slot;
-    if (e.target.dataset.kind === "player") { slots[i].player = e.target.value || null; slots[i].champ = null; }
+    if (e.target.dataset.kind === "player") {
+      slots[i].player = e.target.value || null;
+      slots[i].champ = null;
+      ensureIncluded([slots[i].player]);
+    }
     else slots[i].champ = e.target.value ? +e.target.value : null;
     rankedTabs.assigned = null;  // role assignment changed — stale
+    if (activeTab === "assigned") switchTab("assigned");
     renderSlots(); renderScore();
   }));
 }
@@ -444,14 +724,20 @@ function renderScore() {
   const ready = assign.every(a => a.player && a.champ)
     && new Set(assign.map(a => a.player)).size === 5
     && new Set(assign.map(a => a.champ)).size === 5;
+  const verdictEl = $("#verdict");
   if (!ready) {
     $("#hero").textContent = "–"; $("#meter").style.width = "0%";
+    verdictEl.hidden = true;
     $("#breakdown").textContent = "Fill all five slots (distinct players and champions).";
     return;
   }
   const sc = compScore(assign);
   $("#hero").textContent = pct(sc.total);
   $("#meter").style.width = (sc.total * 100) + "%";
+  const v = verdict(sc.total);
+  verdictEl.hidden = false;
+  verdictEl.textContent = v.label;
+  verdictEl.className = "verdict" + (v.cls ? " " + v.cls : "");
   const synCls = sc.syn >= 0 ? "pos" : "neg";
   $("#breakdown").innerHTML =
     `Individual baseline: <b>${pct(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
@@ -486,9 +772,9 @@ function renderTabs() {
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   const results = rankedTabs[activeTab];
   if (!results) {
-    $("#ranked").innerHTML = `<div class="empty">${activeTab === "assigned"
-      ? "Assign a distinct player to all five roles above, then press “Optimize champs”."
-      : "Check at least 5 players and press “Optimize comp”."}</div>`;
+    $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${activeTab === "assigned"
+      ? "Assign a distinct player to all five roles above."
+      : "Check at least 5 players."}</div>`;
     return;
   }
   renderRanked(results);
@@ -496,7 +782,7 @@ function renderTabs() {
 
 function renderRanked(results) {
   $("#ranked").innerHTML = `<table>
-    <tr><th>#</th>
+    <tr><th></th>
     <th>Win rate<span class="info" tabindex="0">i<span class="tip">
       Estimated win rate for the whole comp: the individual baseline (average of the five slot
       scores — win rate on champ-in-role shrunk toward the current-patch meta, plus mastery and
@@ -508,12 +794,12 @@ function renderRanked(results) {
       Green = you overperform together; red = you win less together than your individual stats
       predict.</span></span></th></tr>
     ${results.map((r, i) => `
-      <tr class="comp-row" data-i="${i}" title="Click to load into the builder">
-        <td>${i + 1}</td>
-        <td><div class="wr-cell"><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div>${pct(r.total)}</div></td>
+      <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
+        <td><span class="rank ${i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
+        <td><div class="wr-cell"><b>${pct(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
         <td class="champ-icons">${r.assign.map(a =>
-          `<img src="${champIcon(a.champ)}" alt="${champName(a.champ)}" title="${ROLE_LABEL[a.role]}: ${a.player.split("#")[0]} — ${champName(a.champ)}">`).join("")}</td>
-        <td class="${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "+" : ""}${(r.syn * 100).toFixed(1)}pp</td>
+          `<span class="ci" data-tip="${a.player.split("#")[0]} · ${ROLE_LABEL[a.role]}"><img src="${champIcon(a.champ)}" alt="${champName(a.champ)}"></span>`).join("")}</td>
+        <td><span class="syn-chip ${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "+" : ""}${(r.syn * 100).toFixed(1)}pp</span></td>
       </tr>`).join("")}
   </table>`;
   document.querySelectorAll(".comp-row").forEach(tr =>
@@ -536,7 +822,12 @@ function runOptimizeChamps() {
 }
 
 function applyComp(r) {
+  // Loading a comp can reassign players to new roles, which makes any cached
+  // "Roles as set" results stale (champ-only clicks keep the same mapping).
+  const mappingChanged = r.assign.some((a, i) => slots[i].player !== a.player);
   r.assign.forEach((a, i) => { slots[i] = { player: a.player, champ: a.champ }; });
+  if (mappingChanged) rankedTabs.assigned = null;
+  ensureIncluded(r.assign.map(a => a.player));
   renderSlots(); renderScore();
 }
 
@@ -556,13 +847,17 @@ fetch("data/players.json").then(r => {
     champPairIdx[Math.min(cp.a, cp.b) + ":" + Math.max(cp.a, cp.b)] = cp;
   for (const pp of D.playerPairs)
     playerPairIdx[[pp.a, pp.b].sort().join("|")] = pp;
-  $("#sub").textContent = `${D.players.length} accounts · data fetched ${D.generatedAt} · patch ${D.ddragonVersion}`
-    + (META ? ` · meta: patch ${META.patch}, ${(META.matchCount / 1e6).toFixed(1)}M ${META.region.toUpperCase()} games` : " · no meta data (run fetch_meta.py)");
+  const chips = [
+    `patch <b>${D.ddragonVersion}</b>`,
+    META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games` : `no meta data`,
+    `fetched ${D.generatedAt.slice(0, 10)}`,
+  ];
+  $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
   render();
 }).catch(() => {
-  $("#sub").textContent = "";
+  $("#sub").innerHTML = "";
   $("#app").innerHTML = `<div class="card empty">
-    <p><b>No data yet.</b></p>
+    <p><b style="color:var(--ink-1)">No data yet.</b></p>
     <p>1. Copy <code>config.example.json</code> → <code>config.json</code> and fill in your Riot API key + the 6 Riot IDs.</p>
     <p>2. Run <code>python3 fetch_data.py</code></p>
     <p>3. Reload this page.</p>
