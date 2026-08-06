@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comp Builder</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --ring: rgba(11,11,11,0.10);
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+    --good-text: #006300; --bad-text: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --page: #0d0d0d;
+      --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+      --good-text: #0ca30c; --bad-text: #e66767;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --ink-1: #ffffff; --ink-2: #c3c2b7; --ink-muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --good-text: #0ca30c; --bad-text: #e66767;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root { background: var(--page); color: var(--ink-1); min-height: 100vh; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 0 0 10px; color: var(--ink-2); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .sub { color: var(--ink-muted); font-size: 13px; margin-bottom: 20px; }
+  .layout { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .card { background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .player { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+  .player:hover { background: var(--grid); }
+  .player input { accent-color: var(--series-1); }
+  .player .name { font-size: 14px; font-weight: 600; flex: 1; }
+  .player .meta { font-size: 12px; color: var(--ink-muted); }
+  .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); } }
+  .slot { background: var(--surface-1); border: 1px solid var(--ring); border-radius: 10px; padding: 12px; }
+  .slot h3 { margin: 0 0 8px; font-size: 12px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .slot select { width: 100%; margin-bottom: 6px; font-size: 13px; padding: 4px; background: var(--page); color: var(--ink-1); border: 1px solid var(--baseline); border-radius: 6px; }
+  .slot img { width: 48px; height: 48px; border-radius: 8px; display: block; margin: 6px auto; }
+  .slot .cstat { font-size: 12px; color: var(--ink-2); text-align: center; }
+  .hero { display: flex; align-items: baseline; gap: 12px; }
+  .hero .num { font-size: 44px; font-weight: 700; }
+  .hero .lbl { font-size: 13px; color: var(--ink-muted); }
+  .meter { height: 8px; background: var(--grid); border-radius: 4px; margin-top: 10px; overflow: hidden; }
+  .meter > div { height: 100%; background: var(--series-1); border-radius: 4px; transition: width .3s; }
+  .btn { background: var(--series-1); color: #fff; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .btn:hover { filter: brightness(1.1); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--ink-muted); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--baseline); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  tr.comp-row { cursor: pointer; }
+  tr.comp-row:hover { background: var(--grid); }
+  .wr-cell { display: flex; align-items: center; gap: 8px; }
+  .wr-bar { flex: 1; max-width: 120px; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+  .wr-bar > div { height: 100%; background: var(--series-1); border-radius: 3px; }
+  .champ-icons img { width: 26px; height: 26px; border-radius: 5px; margin-right: 3px; vertical-align: middle; }
+  .breakdown { font-size: 13px; color: var(--ink-2); line-height: 1.7; }
+  .pos { color: var(--good-text); } .neg { color: var(--bad-text); }
+  .info { position: relative; display: inline-block; cursor: help; color: var(--ink-muted);
+          border: 1px solid var(--baseline); border-radius: 50%; width: 14px; height: 14px;
+          font-size: 10px; line-height: 14px; text-align: center; margin-left: 5px; vertical-align: 1px; }
+  .info .tip { display: none; position: absolute; z-index: 10; left: 50%; transform: translateX(-50%);
+               bottom: 22px; width: 260px; background: var(--surface-1); color: var(--ink-2);
+               border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px;
+               font-size: 12px; line-height: 1.5; font-weight: 400; text-align: left;
+               box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  .info:hover .tip, .info:focus .tip { display: block; }
+  .empty { padding: 40px; text-align: center; color: var(--ink-muted); }
+  code { background: var(--grid); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <h1>Team Composition Builder</h1>
+  <div class="sub" id="sub">Loading account data…</div>
+  <div id="app"></div>
+</div>
+
+<script>
+"use strict";
+const ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
+const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot", UTILITY: "Support" };
+
+// --- scoring model -------------------------------------------------------
+// Individual: champion win rate shrunk toward the champion's CURRENT-PATCH
+// meta win rate for that role (falls back to 50% if meta.json is absent),
+// + mastery familiarity bonus, − off-role penalty.
+// Synergy: champ-pair WR deviation vs the pair's expected meta WR, plus
+// player-pair (duo) WR deviation vs 50%.
+const K_IND = 8;        // shrinkage prior weight for individual champ WR
+const K_PAIR = 20;      // shrinkage for pair stats (small samples)
+const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
+const SYNERGY_WEIGHT = 0.5;      // how much a pair's WR deviation counts
+const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
+const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
+const ROLE_RECORD_MIN_GAMES = 5;     // use the player's champ-in-role record above this sample
+const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
+const MASTERY_FLOOR = 30000;         // below this mastery a champ isn't considered a real pick
+
+let D = null;           // loaded dataset
+let META = null;        // current-patch meta stats (optional)
+let masteryIdx = {};    // riotId -> championId -> points
+let champPairIdx = {};  // "idA:idB" -> {games, wins}
+let playerPairIdx = {}; // "a|b" -> {games, wins}
+let slots = ROLES.map(() => ({ player: null, champ: null }));
+let included = {};      // riotId -> bool
+
+const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
+
+// Share of ALL the player's games played in this role — their role comfort.
+// 0.2 (= 1/5 roles) is neutral; above is home turf, below is off-role.
+const roleShareCache = {};
+function playerRoleShare(riotId, role) {
+  let shares = roleShareCache[riotId];
+  if (!shares) {
+    const p = D.players.find(p => p.riotId === riotId);
+    shares = roleShareCache[riotId] = { total: 0 };
+    for (const c of p.champions)
+      for (const [r, rec] of Object.entries(c.roles)) {
+        shares[r] = (shares[r] || 0) + rec.games;
+        shares.total += rec.games;
+      }
+  }
+  return shares.total ? (shares[role] || 0) / shares.total : 0.2;
+}
+
+// Current-patch meta win rate for a champion in a role. If the champ simply
+// isn't played in that role on this patch, its overall WR is a bad prior —
+// apply the off-meta penalty instead of pretending role doesn't matter.
+const OPGG_POS = { TOP: "TOP", JUNGLE: "JUNGLE", MIDDLE: "MID", BOTTOM: "ADC", UTILITY: "SUPPORT" };
+function metaWR(champId, role) {
+  const m = META && META.champions[champId];
+  if (!m) return 0.5;
+  const pos = role && m.positions[OPGG_POS[role]];
+  if (pos && pos.games >= 100) return pos.winRate;
+  const base = m.winRate ?? 0.5;
+  if (role && Object.keys(m.positions).length) return base - OFF_META_PRIOR_PENALTY;
+  return base;
+}
+
+function masteryBonus(riotId, champId) {
+  const pts = (masteryIdx[riotId] || {})[champId] || 0;
+  return Math.min(pts, 200000) / 200000 * MASTERY_MAX_BONUS;
+}
+
+function roleShare(champEntry, role) {
+  if (!champEntry) return 0;
+  const total = Object.values(champEntry.roles).reduce((a, r) => a + r.games, 0) || 1;
+  return (champEntry.roles[role] || { games: 0 }).games / total;
+}
+
+// Score of one player playing one champion in one role. Uses the player's
+// champ-IN-ROLE record when the sample is big enough, else the champ-overall
+// record; both shrink toward the role-specific meta prior.
+function indScore(riotId, champId, role) {
+  const p = D.players.find(p => p.riotId === riotId);
+  const entry = p.champions.find(c => c.championId === champId);
+  const prior = metaWR(champId, role);
+  const roleRec = entry && entry.roles[role];
+  let wr;
+  if (roleRec && roleRec.wins != null && roleRec.games >= ROLE_RECORD_MIN_GAMES)
+    wr = shrunk(roleRec.wins, roleRec.games, K_IND, prior);
+  else
+    wr = entry ? shrunk(entry.wins, entry.games, K_IND, prior) : prior;
+  const rolePen = entry && roleShare(entry, role) < 0.25 ? OFF_ROLE_PENALTY : 0;
+  const comfort = ROLE_COMFORT_WEIGHT * (playerRoleShare(riotId, role) - 0.2);
+  return wr + masteryBonus(riotId, champId) - rolePen + comfort;
+}
+
+function champPairAdj(a, b) {
+  const s = champPairIdx[Math.min(a, b) + ":" + Math.max(a, b)];
+  if (!s) return 0;
+  // Expected pair WR is the mean of the two champs' meta WRs, so champion
+  // strength isn't double-counted as "synergy".
+  const expected = (metaWR(a, null) + metaWR(b, null)) / 2;
+  return (shrunk(s.wins, s.games, K_PAIR, expected) - expected) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
+}
+
+function playerPairAdj(a, b) {
+  const s = playerPairIdx[[a, b].sort().join("|")];
+  if (!s) return 0;
+  return (shrunk(s.wins, s.games, K_PAIR) - 0.5) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
+}
+
+// Full comp score: mean individual + all pairwise synergy adjustments.
+function compScore(assign) {  // assign: [{player, champ, role}]
+  let ind = 0, syn = 0;
+  for (const a of assign) ind += indScore(a.player, a.champ, a.role);
+  ind /= assign.length;
+  for (let i = 0; i < assign.length; i++)
+    for (let j = i + 1; j < assign.length; j++) {
+      syn += champPairAdj(assign[i].champ, assign[j].champ);
+      syn += playerPairAdj(assign[i].player, assign[j].player);
+    }
+  return { total: Math.max(0.05, Math.min(0.95, ind + syn)), ind, syn };
+}
+
+// A champion is pickable for (player, role) only if the player has actually
+// played it there, or the current meta plays it there (e.g. no Nunu top —
+// unless Nunu top is genuinely part of the patch's meta).
+function roleViable(champEntry, champId, role) {
+  if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= 2) return true;
+  const m = META && META.champions[champId];
+  const pos = m && m.positions[OPGG_POS[role]];
+  return !!(pos && pos.games >= 100 && pos.roleRate >= 0.15);
+}
+
+// Top champion candidates for a player in a role.
+function candidates(riotId, role, n = 3) {
+  const p = D.players.find(p => p.riotId === riotId);
+  const pool = new Map();
+  for (const c of p.champions) pool.set(c.championId, c);
+  for (const m of p.mastery.slice(0, 12)) if (!pool.has(m.championId)) pool.set(m.championId, null);
+  const scored = [...pool.keys()].map(cid => ({
+    cid,
+    s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    viable: roleViable(pool.get(cid), cid, role),
+    mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= MASTERY_FLOOR,
+  }));
+  // Prefer viable + mastered; degrade gracefully so a slot is never empty.
+  const eligible = scored.filter(c => c.viable && c.mastered);
+  const viableOnly = scored.filter(c => c.viable);
+  const list = (eligible.length ? eligible : viableOnly.length ? viableOnly : scored)
+    .sort((a, b) => b.s - a.s);
+  return list.slice(0, n).map(c => c.cid);
+}
+
+// --- optimizer -----------------------------------------------------------
+function* combosOf5(arr) {
+  for (let skip = 0; skip < arr.length; skip++)
+    yield arr.filter((_, i) => i !== skip);
+  if (arr.length === 5) return;
+}
+function* permutations(arr) {
+  if (arr.length <= 1) { yield arr; return; }
+  for (let i = 0; i < arr.length; i++)
+    for (const rest of permutations([...arr.slice(0, i), ...arr.slice(i + 1)]))
+      yield [arr[i], ...rest];
+}
+
+// Champion-only optimization: keep the player→role assignment currently in
+// the slots (e.g. what you got from fill) and search champions only.
+function optimizeChamps(topN = 10) {
+  const players = slots.map(s => s.player);
+  if (players.some(p => !p) || new Set(players).size !== 5) return null;
+  const cands = players.map((rid, i) => candidates(rid, ROLES[i], 8));
+  const results = [];
+  const idx = [0, 0, 0, 0, 0];
+  while (true) {
+    const champs = idx.map((ci, i) => cands[i][ci]).filter(c => c !== undefined);
+    if (champs.length === 5 && new Set(champs).size === 5) {
+      const assign = players.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
+      results.push({ assign, ...compScore(assign) });
+    }
+    let d = 4;
+    while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
+    if (d < 0) break;
+  }
+  results.sort((a, b) => b.total - a.total);
+  return results.slice(0, topN);
+}
+
+function optimize(topN = 10) {
+  const pool = D.players.map(p => p.riotId).filter(r => included[r]);
+  if (pool.length < 5) return [];
+  const results = [];
+  const playerSets = pool.length === 5 ? [pool] : [...combosOf5(pool)];
+  for (const five of playerSets) {
+    for (const perm of permutations(five)) {
+      const cands = perm.map((rid, i) => candidates(rid, ROLES[i]));
+      const idx = [0, 0, 0, 0, 0];
+      while (true) {
+        const champs = idx.map((ci, i) => cands[i][ci]).filter(c => c !== undefined);
+        if (champs.length === 5 && new Set(champs).size === 5) {
+          const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
+          const sc = compScore(assign);
+          results.push({ assign, ...sc });
+        }
+        let d = 4;
+        while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
+        if (d < 0) break;
+      }
+    }
+  }
+  results.sort((a, b) => b.total - a.total);
+  const seen = new Set(), out = [];
+  for (const r of results) {
+    const key = r.assign.map(a => a.player + a.champ).join(",");
+    if (!seen.has(key)) { seen.add(key); out.push(r); }
+    if (out.length >= topN) break;
+  }
+  return out;
+}
+
+// --- UI ------------------------------------------------------------------
+const $ = sel => document.querySelector(sel);
+const champName = id => (D.champions[id] || {}).name || `#${id}`;
+const champIcon = id => {
+  const c = D.champions[id];
+  return c ? `https://ddragon.leagueoflegends.com/cdn/${D.ddragonVersion}/img/champion/${c.slug}.png` : "";
+};
+const pct = x => (x * 100).toFixed(1) + "%";
+
+function render() {
+  $("#app").innerHTML = `
+    <div class="layout">
+      <div>
+        <div class="card">
+          <h2>Players</h2>
+          <div class="sub" style="margin-bottom:8px">Optimizer picks the best 5 of those checked.</div>
+          ${D.players.map(p => {
+            const games = p.champions.reduce((a, c) => a + c.games, 0);
+            const wins = p.champions.reduce((a, c) => a + c.wins, 0);
+            const QUEUE_TAG = { "420": "solo", "440": "flex", "700": "clash", "710": "clash" };
+            const split = p.queues
+              ? Object.entries(p.queues)
+                  .sort(([a], [b]) => a - b)
+                  .map(([qid, s]) => `${QUEUE_TAG[qid] || "q" + qid} ${pct(s.wins / s.games)} · ${s.games}g`)
+                  .join("<br>")
+              : `${games ? pct(wins / games) : "–"} · ${games}g`;
+            return `<label class="player">
+              <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
+              <span class="name">${p.riotId}</span>
+              <span class="meta" style="text-align:right">${split}</span>
+            </label>`;
+          }).join("")}
+          <div style="margin-top:12px"><button class="btn" id="opt">Optimize comp</button></div>
+        </div>
+        <div class="card">
+          <h2>Estimated win rate</h2>
+          <div class="hero"><span class="num" id="hero">–</span><span class="lbl">expected</span></div>
+          <div class="meter"><div id="meter" style="width:0%"></div></div>
+          <div class="breakdown" id="breakdown" style="margin-top:10px"></div>
+        </div>
+      </div>
+      <div>
+        <div style="margin-bottom:10px; display:flex; gap:10px; align-items:center">
+          <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
+          <span class="sub" style="margin:0">Set each role's player below, then let the optimizer pick only the champions.</span>
+        </div>
+        <div class="roles" id="slots"></div>
+        <div class="card" style="margin-top:16px">
+          <h2>Top compositions</h2>
+          <div id="ranked"><div class="empty">Run the optimizer.</div></div>
+        </div>
+      </div>
+    </div>`;
+  document.querySelectorAll("[data-player]").forEach(cb =>
+    cb.addEventListener("change", e => { included[e.target.dataset.player] = e.target.checked; }));
+  $("#opt").addEventListener("click", runOptimize);
+  $("#optChamps").addEventListener("click", runOptimizeChamps);
+  renderSlots();
+  renderScore();
+}
+
+function renderSlots() {
+  $("#slots").innerHTML = ROLES.map((role, i) => {
+    const s = slots[i];
+    const playerOpts = D.players.map(p =>
+      `<option value="${p.riotId}" ${s.player === p.riotId ? "selected" : ""}>${p.riotId.split("#")[0]}</option>`).join("");
+    let champOpts = "", stat = "";
+    let comfortLine = "";
+    if (s.player) {
+      const share = playerRoleShare(s.player, role);
+      comfortLine = `<div class="cstat">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
+      const p = D.players.find(p => p.riotId === s.player);
+      const cands = candidates(s.player, role, 15);
+      if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
+      const opt = cid => `<option value="${cid}" ${s.champ === cid ? "selected" : ""}>${champName(cid)}</option>`;
+      const playedThere = cands.filter(cid => {
+        const e = p.champions.find(c => c.championId === cid);
+        return e && (e.roles[role] || { games: 0 }).games >= 2;
+      });
+      const metaOnly = cands.filter(cid => !playedThere.includes(cid))
+        .slice(0, Math.max(0, 6 - Math.min(playedThere.length, 4)));  // keep the list short
+      if (s.champ && !playedThere.includes(s.champ) && !metaOnly.includes(s.champ))
+        metaOnly.unshift(s.champ);  // never drop the currently selected champion
+      champOpts =
+        (playedThere.length ? `<optgroup label="Plays this role">${playedThere.map(opt).join("")}</optgroup>` : "") +
+        (metaOnly.length ? `<optgroup label="Meta-viable here">${metaOnly.map(opt).join("")}</optgroup>` : "");
+      if (s.champ) {
+        const p = D.players.find(p => p.riotId === s.player);
+        const e = p.champions.find(c => c.championId === s.champ);
+        stat = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : "no ranked games";
+        if (META) stat += `<br>meta ${pct(metaWR(s.champ, role))}`;
+        const pts = (masteryIdx[s.player] || {})[s.champ];
+        stat += `<br>mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}`;
+        stat += `<br><b>score ${pct(indScore(s.player, s.champ, role))}</b>`;
+      }
+    }
+    return `<div class="slot">
+      <h3>${ROLE_LABEL[role]}</h3>
+      <select data-slot="${i}" data-kind="player"><option value="">— player —</option>${playerOpts}</select>
+      ${comfortLine}
+      <select data-slot="${i}" data-kind="champ" ${s.player ? "" : "disabled"}><option value="">— champion —</option>${champOpts}</select>
+      ${s.champ ? `<img src="${champIcon(s.champ)}" alt="${champName(s.champ)}" title="${champName(s.champ)}">` : ""}
+      <div class="cstat">${stat}</div>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("#slots select").forEach(sel => sel.addEventListener("change", e => {
+    const i = +e.target.dataset.slot;
+    if (e.target.dataset.kind === "player") { slots[i].player = e.target.value || null; slots[i].champ = null; }
+    else slots[i].champ = e.target.value ? +e.target.value : null;
+    renderSlots(); renderScore();
+  }));
+}
+
+function renderScore() {
+  const assign = slots.map((s, i) => ({ player: s.player, champ: s.champ, role: ROLES[i] }));
+  const ready = assign.every(a => a.player && a.champ)
+    && new Set(assign.map(a => a.player)).size === 5
+    && new Set(assign.map(a => a.champ)).size === 5;
+  if (!ready) {
+    $("#hero").textContent = "–"; $("#meter").style.width = "0%";
+    $("#breakdown").textContent = "Fill all five slots (distinct players and champions).";
+    return;
+  }
+  const sc = compScore(assign);
+  $("#hero").textContent = pct(sc.total);
+  $("#meter").style.width = (sc.total * 100) + "%";
+  const synCls = sc.syn >= 0 ? "pos" : "neg";
+  $("#breakdown").innerHTML =
+    `Individual baseline: <b>${pct(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
+    `Average of the five slot scores: each player's win rate on their champion in that role ` +
+    `(shrunk toward the champ's current-patch meta WR), plus mastery bonus and role comfort, ` +
+    `minus off-role penalties. "How good are these five picks in isolation?"</span></span><br>` +
+    `Synergy adjustment: <b class="${synCls}">${sc.syn >= 0 ? "+" : ""}${(sc.syn * 100).toFixed(1)}pp</b>` +
+    `<span class="info" tabindex="0">i<span class="tip">` +
+    `Sum over every champ pair and player duo of how your actual shared-game record deviates ` +
+    `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
+    `are small. Green: this group overperforms together. Red: you win less together than your ` +
+    `individual stats predict. Caveat: pair and individual records come from the same games, so ` +
+    `hot streaks inflate both.</span></span>`;
+}
+
+function renderRanked(results) {
+  applyComp(results[0]);
+  $("#ranked").innerHTML = `<table>
+    <tr><th>#</th>
+    <th>Win rate<span class="info" tabindex="0">i<span class="tip">
+      Estimated win rate for the whole comp: the individual baseline (average of the five slot
+      scores — win rate on champ-in-role shrunk toward the current-patch meta, plus mastery and
+      role comfort) plus the synergy adjustment.</span></span></th>
+    <th>Comp</th>
+    <th>Synergy<span class="info" tabindex="0">i<span class="tip">
+      How much this group's actual shared-game record shifts the estimate: champ pairs measured
+      against their average meta WR, player duos against 50%, shrunk when samples are small.
+      Green = you overperform together; red = you win less together than your individual stats
+      predict.</span></span></th></tr>
+    ${results.map((r, i) => `
+      <tr class="comp-row" data-i="${i}" title="Click to load into the builder">
+        <td>${i + 1}</td>
+        <td><div class="wr-cell"><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div>${pct(r.total)}</div></td>
+        <td class="champ-icons">${r.assign.map(a =>
+          `<img src="${champIcon(a.champ)}" alt="${champName(a.champ)}" title="${ROLE_LABEL[a.role]}: ${a.player.split("#")[0]} — ${champName(a.champ)}">`).join("")}</td>
+        <td class="${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "+" : ""}${(r.syn * 100).toFixed(1)}pp</td>
+      </tr>`).join("")}
+  </table>`;
+  document.querySelectorAll(".comp-row").forEach(tr =>
+    tr.addEventListener("click", () => applyComp(results[+tr.dataset.i])));
+}
+
+function runOptimize() {
+  const top = optimize(10);
+  if (!top.length) {
+    $("#ranked").innerHTML = `<div class="empty">Need at least 5 players checked.</div>`;
+    return;
+  }
+  renderRanked(top);
+}
+
+function runOptimizeChamps() {
+  const top = optimizeChamps(10);
+  if (!top) {
+    $("#ranked").innerHTML = `<div class="empty">Assign a distinct player to all five roles first (the player dropdown on each card).</div>`;
+    return;
+  }
+  renderRanked(top);
+}
+
+function applyComp(r) {
+  r.assign.forEach((a, i) => { slots[i] = { player: a.player, champ: a.champ }; });
+  renderSlots(); renderScore();
+}
+
+// --- boot ----------------------------------------------------------------
+const metaLoad = fetch("data/meta.json").then(r => r.ok ? r.json() : null).catch(() => null);
+fetch("data/players.json").then(r => {
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}).then(async data => {
+  D = data;
+  META = await metaLoad;
+  for (const p of D.players) {
+    included[p.riotId] = true;
+    masteryIdx[p.riotId] = Object.fromEntries(p.mastery.map(m => [m.championId, m.points]));
+  }
+  for (const cp of D.championPairs)
+    champPairIdx[Math.min(cp.a, cp.b) + ":" + Math.max(cp.a, cp.b)] = cp;
+  for (const pp of D.playerPairs)
+    playerPairIdx[[pp.a, pp.b].sort().join("|")] = pp;
+  $("#sub").textContent = `${D.players.length} accounts · data fetched ${D.generatedAt} · patch ${D.ddragonVersion}`
+    + (META ? ` · meta: patch ${META.patch}, ${(META.matchCount / 1e6).toFixed(1)}M ${META.region.toUpperCase()} games` : " · no meta data (run fetch_meta.py)");
+  render();
+}).catch(() => {
+  $("#sub").textContent = "";
+  $("#app").innerHTML = `<div class="card empty">
+    <p><b>No data yet.</b></p>
+    <p>1. Copy <code>config.example.json</code> → <code>config.json</code> and fill in your Riot API key + the 6 Riot IDs.</p>
+    <p>2. Run <code>python3 fetch_data.py</code></p>
+    <p>3. Reload this page.</p>
+  </div>`;
+});
+</script>
+</body>
+</html>
