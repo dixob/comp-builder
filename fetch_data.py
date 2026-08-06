@@ -63,6 +63,9 @@ class Riot:
     def mastery(self, puuid: str):
         return self.get(self.platform, f"/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}")
 
+    def summoner(self, puuid: str):
+        return self.get(self.platform, f"/lol/summoner/v4/summoners/by-puuid/{puuid}")
+
     def match_ids(self, puuid: str, count: int, queue):
         # queue: int = a single queue id (420 solo, 440 flex); "ranked" = both.
         # The endpoint returns at most 100 ids per call, so page through.
@@ -118,6 +121,7 @@ def main():
         acct = riot.account(game_name, tag)
         puuid = acct["puuid"]
         puuid_to_player[puuid] = riot_id
+        summoner = riot.summoner(puuid)
         print(f"  mastery...")
         mastery = riot.mastery(puuid)
         print(f"  match ids...")
@@ -126,6 +130,7 @@ def main():
         players.append({
             "riotId": riot_id,
             "puuid": puuid,
+            "profileIconId": summoner.get("profileIconId"),
             "mastery": [
                 {"championId": m["championId"], "level": m["championLevel"], "points": m["championPoints"]}
                 for m in mastery
