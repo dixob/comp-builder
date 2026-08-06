@@ -152,7 +152,10 @@ def main():
     queue_stats = defaultdict(lambda: defaultdict(lambda: {"games": 0, "wins": 0}))
     # Tracked-player-pair synergy: games where two of our accounts shared a team.
     pair_stats = defaultdict(lambda: {"games": 0, "wins": 0})
-    # Global champion-pair synergy from every team seen in the fetched matches.
+    # Champion-pair synergy, pilot-attributed: only pairs where BOTH champions
+    # were piloted by tracked accounts on the same team.  Champ-level pairs from
+    # stranger teams would credit e.g. a teammate's Ezreal record to any of our
+    # players hovering Ezreal.
     champ_pair_stats = defaultdict(lambda: {"games": 0, "wins": 0})
 
     for m in matches:
@@ -178,10 +181,15 @@ def main():
                     key = (puuid_to_player[tracked[i]], puuid_to_player[tracked[j]])
                     pair_stats[key]["games"] += 1
                     pair_stats[key]["wins"] += won
-            cids = sorted(p["championId"] for p in team)
-            for i in range(len(cids)):
-                for j in range(i + 1, len(cids)):
-                    cp = champ_pair_stats[(cids[i], cids[j])]
+            tracked_parts = sorted(
+                (p for p in team if p["puuid"] in puuid_to_player),
+                key=lambda p: (puuid_to_player[p["puuid"]], p["championId"]))
+            for i in range(len(tracked_parts)):
+                for j in range(i + 1, len(tracked_parts)):
+                    pi, pj = tracked_parts[i], tracked_parts[j]
+                    key = (puuid_to_player[pi["puuid"]], pi["championId"],
+                           puuid_to_player[pj["puuid"]], pj["championId"])
+                    cp = champ_pair_stats[key]
                     cp["games"] += 1
                     cp["wins"] += won
 
@@ -202,7 +210,8 @@ def main():
             {"a": a, "b": b, **s} for (a, b), s in pair_stats.items()
         ],
         "championPairs": [
-            {"a": a, "b": b, **s} for (a, b), s in champ_pair_stats.items() if s["games"] >= 2
+            {"pa": pa, "a": a, "pb": pb, "b": b, **s}
+            for (pa, a, pb, b), s in champ_pair_stats.items() if s["games"] >= 2
         ],
     }
     (DATA / "players.json").write_text(json.dumps(out))

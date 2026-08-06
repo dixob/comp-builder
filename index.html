@@ -319,8 +319,9 @@ const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot",
 // Individual: champion win rate shrunk toward the champion's CURRENT-PATCH
 // meta win rate for that role (falls back to 50% if meta.json is absent),
 // + mastery familiarity bonus, − off-role penalty.
-// Synergy: champ-pair WR deviation vs the pair's expected meta WR, plus
-// player-pair (duo) WR deviation vs 50%.
+// Synergy: pilot-attributed champ-pair WR deviation vs the pair's expected
+// meta WR (only games where these two PLAYERS piloted these two champs on the
+// same team), plus player-pair (duo) WR deviation vs 50%.
 const K_IND = 8;        // shrinkage prior weight for individual champ WR
 const K_PAIR = 20;      // shrinkage for pair stats (small samples)
 const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
@@ -335,7 +336,7 @@ const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust
 let D = null;           // loaded dataset
 let META = null;        // current-patch meta stats (optional)
 let masteryIdx = {};    // riotId -> championId -> points
-let champPairIdx = {};  // "idA:idB" -> {games, wins}
+let champPairIdx = {};  // "rid|cid:rid|cid" -> {games, wins} (pilot-attributed)
 let playerPairIdx = {}; // "a|b" -> {games, wins}
 let slots = ROLES.map(() => ({ player: null, champ: null }));
 let included = {};      // riotId -> bool
@@ -402,12 +403,17 @@ function indScore(riotId, champId, role) {
   return wr + masteryBonus(riotId, champId) - rolePen + comfort;
 }
 
-function champPairAdj(a, b) {
-  const s = champPairIdx[Math.min(a, b) + ":" + Math.max(a, b)];
+// A and B are assign entries ({player, champ}): the pair record only counts
+// games where these two players piloted these two champions themselves —
+// someone else's games on the same champion are not this player's synergy.
+function champPairAdj(A, B) {
+  const [x, y] = [[A.player, A.champ], [B.player, B.champ]]
+    .sort((p, q) => p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : p[1] - q[1]);
+  const s = champPairIdx[x[0] + "|" + x[1] + ":" + y[0] + "|" + y[1]];
   if (!s) return 0;
   // Expected pair WR is the mean of the two champs' meta WRs, so champion
   // strength isn't double-counted as "synergy".
-  const expected = (metaWR(a, null) + metaWR(b, null)) / 2;
+  const expected = (metaWR(A.champ, null) + metaWR(B.champ, null)) / 2;
   return (shrunk(s.wins, s.games, K_PAIR, expected) - expected) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
 }
 
@@ -424,7 +430,7 @@ function compScore(assign) {  // assign: [{player, champ, role}]
   ind /= assign.length;
   for (let i = 0; i < assign.length; i++)
     for (let j = i + 1; j < assign.length; j++) {
-      syn += champPairAdj(assign[i].champ, assign[j].champ);
+      syn += champPairAdj(assign[i], assign[j]);
       syn += playerPairAdj(assign[i].player, assign[j].player);
     }
   return { total: Math.max(0.05, Math.min(0.95, ind + syn)), ind, syn };
@@ -749,9 +755,10 @@ function renderScore() {
     `<span class="info" tabindex="0">i<span class="tip">` +
     `Sum over every champ pair and player duo of how your actual shared-game record deviates ` +
     `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
-    `are small. Green: this group overperforms together. Red: you win less together than your ` +
-    `individual stats predict. Caveat: pair and individual records come from the same games, so ` +
-    `hot streaks inflate both.</span></span>`;
+    `are small. Champ pairs are pilot-attributed: only games where these two players played ` +
+    `these two champions themselves count. Green: this group overperforms together. Red: you ` +
+    `win less together than your individual stats predict. Caveat: pair and individual records ` +
+    `come from the same games, so hot streaks inflate both.</span></span>`;
 }
 
 // Two result sets: champs-only for the roles set in the slots, and the full
@@ -790,8 +797,9 @@ function renderRanked(results) {
       role comfort) plus the synergy adjustment.</span></span></th>
     <th>Comp</th>
     <th>Synergy<span class="info" tabindex="0">i<span class="tip">
-      How much this group's actual shared-game record shifts the estimate: champ pairs measured
-      against their average meta WR, player duos against 50%, shrunk when samples are small.
+      How much this group's actual shared-game record shifts the estimate: champ pairs (only
+      games these two players piloted these two champs themselves) measured against their
+      average meta WR, player duos against 50%, shrunk when samples are small.
       Green = you overperform together; red = you win less together than your individual stats
       predict.</span></span></th></tr>
     ${results.map((r, i) => `
@@ -845,7 +853,7 @@ fetch("data/players.json").then(r => {
     masteryIdx[p.riotId] = Object.fromEntries(p.mastery.map(m => [m.championId, m.points]));
   }
   for (const cp of D.championPairs)
-    champPairIdx[Math.min(cp.a, cp.b) + ":" + Math.max(cp.a, cp.b)] = cp;
+    champPairIdx[cp.pa + "|" + cp.a + ":" + cp.pb + "|" + cp.b] = cp;
   for (const pp of D.playerPairs)
     playerPairIdx[[pp.a, pp.b].sort().join("|")] = pp;
   const chips = [
