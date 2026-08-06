@@ -267,6 +267,27 @@
   .syn-chip.pos { background: var(--good-dim); border: 1px solid rgba(74,222,128,0.3); }
   .syn-chip.neg { background: var(--bad-dim); border: 1px solid rgba(244,115,126,0.3); }
 
+  /* ---- team profile ---- */
+  .prow { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .prow .plabel { flex: none; width: 74px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .prow .pmeter { flex: 1; position: relative; height: 8px; background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 4px; overflow: hidden; }
+  .prow .pmeter > div { height: 100%; border-radius: 4px; background: var(--gold); transition: width .3s; }
+  .pstatus {
+    flex: none; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    border-radius: 999px; padding: 3px 10px; min-width: 58px; text-align: center;
+    background: var(--surface-2); color: var(--ink-muted); border: 1px solid var(--line);
+  }
+  .pstatus.good { background: var(--good-dim); color: var(--good); border-color: rgba(74,222,128,0.3); }
+  .pstatus.warn { background: var(--gold-dim); color: var(--gold-soft); border-color: rgba(227,177,63,0.35); }
+  .pstatus.bad  { background: var(--bad-dim);  color: var(--bad);  border-color: rgba(244,115,126,0.3); }
+  .stackbar { display: flex; gap: 2px; height: 12px; border-radius: 6px; overflow: hidden; margin-top: 6px; }
+  .stackbar > div { height: 100%; }
+  .stackbar .sPhys { background: #e08b3d; }
+  .stackbar .sMagic { background: #6aa8e8; }
+  .stackbar .sTrue { background: #cfd8e3; }
+  .dmglegend { display: flex; gap: 14px; margin-top: 7px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .dmglegend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--ink-muted); font-size: 13.5px; line-height: 1.7; }
   .empty svg { color: var(--line); margin-bottom: 10px; }
@@ -335,6 +356,7 @@ const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust
 
 let D = null;           // loaded dataset
 let META = null;        // current-patch meta stats (optional)
+let PROFILES = null;    // per-champion combat profiles (optional)
 let masteryIdx = {};    // riotId -> championId -> points
 let champPairIdx = {};  // "rid|cid:rid|cid" -> {games, wins} (pilot-attributed)
 let playerPairIdx = {}; // "a|b" -> {games, wins}
@@ -604,6 +626,10 @@ function render() {
           <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
           <div class="breakdown" id="breakdown"></div>
         </div>
+        ${PROFILES ? `<div class="card">
+          <h2>Team profile</h2>
+          <div id="profile"></div>
+        </div>` : ""}
       </div>
       <div>
         <div class="board-head">
@@ -727,6 +753,7 @@ function renderSlots() {
 }
 
 function renderScore() {
+  renderProfile();
   const assign = slots.map((s, i) => ({ player: s.player, champ: s.champ, role: ROLES[i] }));
   const ready = assign.every(a => a.player && a.champ)
     && new Set(assign.map(a => a.player)).size === 5
@@ -759,6 +786,64 @@ function renderScore() {
     `these two champions themselves count. Green: this group overperforms together. Red: you ` +
     `win less together than your individual stats predict. Caveat: pair and individual records ` +
     `come from the same games, so hot streaks inflate both.</span></span>`;
+}
+
+// Advisory read on the comp's shape — damage mix, frontline, crowd control —
+// from per-champion combat profiles (data/profiles.json). Deliberately NOT
+// part of the win-rate estimate: it flags structural risks, it doesn't score.
+function renderProfile() {
+  const el = $("#profile");
+  if (!el || !PROFILES) return;
+  const champs = slots.filter(s => s.champ).map(s => PROFILES.champions[s.champ]).filter(Boolean);
+  if (champs.length < 5) {
+    el.innerHTML = `<div class="hint">Pick all five champions to see damage mix, frontline, and CC.</div>`;
+    return;
+  }
+  const share = k => champs.reduce((a, c) => a + c[k], 0) / champs.length;
+  const phys = share("physShare"), magic = share("magicShare"), tru = Math.max(0, 1 - phys - magic);
+  const dmgStatus = phys >= 0.7 ? { label: "Heavy AD", cls: "warn", tip: "easy to counter with armor" }
+    : magic >= 0.7 ? { label: "Heavy AP", cls: "warn", tip: "easy to counter with magic resist" }
+    : { label: "Mixed", cls: "good", tip: "" };
+
+  const tanks = champs.filter(c => c.tankPct >= 0.75).length;
+  const maxTank = Math.max(...champs.map(c => c.tankPct));
+  const front = tanks >= 2 ? { label: "Heavy", cls: "good", w: 100 }
+    : tanks === 1 ? { label: "Solid", cls: "good", w: 70 }
+    : maxTank >= 0.6 ? { label: "Thin", cls: "warn", w: 40 }
+    : { label: "None", cls: "bad", w: 15 };
+
+  const ccAvg = champs.reduce((a, c) => a + c.ccPct, 0) / champs.length;
+  const cc = ccAvg >= 0.6 ? { label: "High", cls: "good" }
+    : ccAvg >= 0.35 ? { label: "Medium", cls: "" }
+    : { label: "Low", cls: "warn" };
+
+  const pctLbl = x => Math.round(x * 100) + "%";
+  el.innerHTML = `
+    <div style="display:flex; align-items:center; gap:10px">
+      <span class="plabel" style="flex:none; width:74px; font-size:12px; color:var(--ink-2); font-weight:600">Damage</span>
+      <span style="flex:1"></span>
+      <span class="pstatus ${dmgStatus.cls}" ${dmgStatus.tip ? `title="${dmgStatus.tip}"` : ""}>${dmgStatus.label}</span>
+    </div>
+    <div class="stackbar">
+      <div class="sPhys" style="width:${phys * 100}%"></div>
+      <div class="sMagic" style="width:${magic * 100}%"></div>
+      <div class="sTrue" style="width:${tru * 100}%"></div>
+    </div>
+    <div class="dmglegend">
+      <span><span class="dot sPhys" style="background:#e08b3d"></span>Physical ${pctLbl(phys)}</span>
+      <span><span class="dot" style="background:#6aa8e8"></span>Magic ${pctLbl(magic)}</span>
+      <span><span class="dot" style="background:#cfd8e3"></span>True ${pctLbl(tru)}</span>
+    </div>
+    <div class="prow">
+      <span class="plabel">Frontline</span>
+      <span class="pmeter"><div style="width:${front.w}%"></div></span>
+      <span class="pstatus ${front.cls}">${front.label}</span>
+    </div>
+    <div class="prow">
+      <span class="plabel">CC</span>
+      <span class="pmeter"><div style="width:${ccAvg * 100}%"></div></span>
+      <span class="pstatus ${cc.cls}">${cc.label}</span>
+    </div>`;
 }
 
 // Two result sets: champs-only for the roles set in the slots, and the full
@@ -842,12 +927,14 @@ function applyComp(r) {
 
 // --- boot ----------------------------------------------------------------
 const metaLoad = fetch("data/meta.json").then(r => r.ok ? r.json() : null).catch(() => null);
+const profileLoad = fetch("data/profiles.json").then(r => r.ok ? r.json() : null).catch(() => null);
 fetch("data/players.json").then(r => {
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }).then(async data => {
   D = data;
   META = await metaLoad;
+  PROFILES = await profileLoad;
   for (const p of D.players) {
     included[p.riotId] = true;
     masteryIdx[p.riotId] = Object.fromEntries(p.mastery.map(m => [m.championId, m.points]));
