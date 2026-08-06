@@ -350,7 +350,15 @@ function render() {
       <div>
         <div style="margin-bottom:10px; display:flex; gap:10px; align-items:center">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
-          <span class="sub" style="margin:0">Set each role's player below, then let the optimizer pick only the champions.</span>
+          <span class="sub" style="margin:0">Set each role's player below, then let the optimizer pick only the champions.
+            <span class="info" tabindex="0">i<span class="tip">
+            Each card's <b>score</b> is that pick's full composite: the player's win rate on the
+            champion in that role (their champ-in-role record when they have 5+ games there,
+            else their overall champ record), shrunk toward the champion's current-patch meta
+            win rate for the role; plus a mastery bonus (up to +3% at 200k points) and role
+            comfort (how much of their games are in this role); minus penalties for off-role
+            picks and champs the role's meta doesn't support. Synergy is not in this number —
+            it belongs to pairs and shows in the breakdown above.</span></span></span>
         </div>
         <div class="roles" id="slots"></div>
         <div class="card" style="margin-top:16px">
