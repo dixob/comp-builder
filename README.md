@@ -8,8 +8,10 @@ It blends three signals to estimate a five-man comp's win rate:
 - **Current-patch meta** — per-champion, per-role win rates from ~1.3M ranked
   games (OP.GG), used as the Bayesian prior so small samples don't lie
 - **Synergy** — the group's actual shared-game record, measured against
-  expectation: player duos, plus pilot-attributed champ pairs (only games
-  where those two players piloted those two champions themselves)
+  expectation: player duos (role-weighted — games in the assigned role combo
+  count fully, the duo's other games are discounted), plus pilot-attributed
+  champ pairs (only games where those two players piloted those two
+  champions themselves)
 
 A **Team profile** panel also reads the comp's shape — damage mix
 (physical/magic/true), frontline, and crowd control — from per-champion

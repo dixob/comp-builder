@@ -49,10 +49,10 @@ def main():
         }
         for p in src["players"]
     }
-    def pair_rec():
-        return {"games": 0, "wins": 0, "q": {}}
-    player_pairs = defaultdict(pair_rec)
-    champ_pairs = defaultdict(pair_rec)
+    # player pairs carry a per-role-combo split ("TOP|JUNGLE" keyed on the
+    # sorted pair order) so synergy can be weighted to the assigned roles
+    player_pairs = defaultdict(lambda: {"games": 0, "wins": 0, "roles": {}, "q": {}})
+    champ_pairs = defaultdict(lambda: {"games": 0, "wins": 0, "q": {}})
     profile_sums = defaultdict(lambda: {k: 0 for k in PROFILE_FIELDS} | {"games": 0})
     processed = []
 
@@ -106,8 +106,18 @@ def main():
                     pk = "|".join(sorted([rid_of[pi["puuid"]], rid_of[pj["puuid"]]]))
                     ck = (f"{rid_of[pi['puuid']]}|{pi['championId']}:"
                           f"{rid_of[pj['puuid']]}|{pj['championId']}")
-                    for s in (player_pairs[pk], player_pairs[pk]["q"].setdefault(qid, {"games": 0, "wins": 0}),
-                              champ_pairs[ck], champ_pairs[ck]["q"].setdefault(qid, {"games": 0, "wins": 0})):
+                    # tracked is sorted by riotId, so this combo matches pk's order
+                    combo = ((pi.get("teamPosition") or "UNKNOWN") + "|" +
+                             (pj.get("teamPosition") or "UNKNOWN"))
+                    pp = player_pairs[pk]
+                    ppq = pp["q"].setdefault(qid, {"games": 0, "wins": 0, "roles": {}})
+                    for s in (pp, ppq):
+                        s["games"] += 1
+                        s["wins"] += won
+                        r = s["roles"].setdefault(combo, {"games": 0, "wins": 0})
+                        r["games"] += 1
+                        r["wins"] += won
+                    for s in (champ_pairs[ck], champ_pairs[ck]["q"].setdefault(qid, {"games": 0, "wins": 0})):
                         s["games"] += 1
                         s["wins"] += won
 

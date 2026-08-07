@@ -112,13 +112,18 @@ function mergeMatch(state, m) {
       for (let j = i + 1; j < tracked.length; j++) {
         const [pi, pj] = [tracked[i], tracked[j]];
         const pp = state.playerPairs[[ridOf[pi.puuid], ridOf[pj.puuid]].sort().join("|")] ??=
-          { games: 0, wins: 0, q: {} };
+          { games: 0, wins: 0, roles: {}, q: {} };
+        // tracked is sorted by riotId, so the combo matches the key's order
+        const combo = `${pi.teamPosition || "UNKNOWN"}|${pj.teamPosition || "UNKNOWN"}`;
+        const ppq = (pp.q ??= {})[qid] ??= { games: 0, wins: 0, roles: {} };
+        for (const s of [pp, ppq]) {
+          bump(s, won);
+          bump((s.roles ??= {})[combo] ??= { games: 0, wins: 0 }, won);
+        }
         const cp = state.champPairs[`${ridOf[pi.puuid]}|${pi.championId}:${ridOf[pj.puuid]}|${pj.championId}`] ??=
           { games: 0, wins: 0, q: {} };
-        for (const s of [pp, cp]) {
-          bump(s, won);
-          bump((s.q ??= {})[qid] ??= { games: 0, wins: 0 }, won);
-        }
+        bump(cp, won);
+        bump((cp.q ??= {})[qid] ??= { games: 0, wins: 0 }, won);
       }
   }
 }

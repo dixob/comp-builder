@@ -389,7 +389,7 @@ let META = null;        // current-patch meta stats (optional)
 let PROFILES = null;    // per-champion combat profiles (optional)
 let masteryIdx = {};    // riotId -> championId -> points
 let champPairIdx = {};  // "rid|cid:rid|cid" -> {games, wins} (pilot-attributed)
-let playerPairIdx = {}; // "a|b" -> {games, wins}
+let playerPairIdx = {}; // "a|b" -> {games, wins, roles: {"roleA|roleB": {games, wins}}}
 let slots = ROLES.map(() => ({ player: null, champ: null }));
 let included = {};      // riotId -> bool
 let indCache = {};      // memoized indScore — larger rosters make the search combinatorial
@@ -502,10 +502,22 @@ function buildPairBoost() {
   }
 }
 
-function playerPairAdj(a, b) {
+// Duo record, role-weighted: shared games where the duo played the roles
+// they're assigned here count fully; games in other role combos are
+// discounted like indScore's off-role games (chemistry partly transfers,
+// but a bot-lane duo's record shouldn't fully back a top+jungle pairing).
+// Older pair records without a role split fall back to full weight.
+function playerPairAdj(a, ra, b, rb) {
   const s = playerPairIdx[[a, b].sort().join("|")];
   if (!s) return 0;
-  return (shrunk(s.wins, s.games, K_PAIR) - 0.5) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
+  let g = s.games, w = s.wins;
+  if (s.roles && Object.keys(s.roles).length) {
+    const rec = s.roles[s.a === a ? ra + "|" + rb : rb + "|" + ra] || { games: 0, wins: 0 };
+    const offW = strictRole ? 0 : OFF_ROLE_GAME_WEIGHT;
+    g = rec.games + (s.games - rec.games) * offW;
+    w = rec.wins + (s.wins - rec.wins) * offW;
+  }
+  return (shrunk(w, g, K_PAIR) - 0.5) * SYNERGY_WEIGHT * (g / (g + 10));
 }
 
 // Full comp score: mean individual + all pairwise synergy adjustments.
@@ -516,7 +528,7 @@ function compScore(assign) {  // assign: [{player, champ, role}]
   for (let i = 0; i < assign.length; i++)
     for (let j = i + 1; j < assign.length; j++) {
       syn += champPairAdj(assign[i], assign[j]);
-      syn += playerPairAdj(assign[i].player, assign[j].player);
+      syn += playerPairAdj(assign[i].player, assign[i].role, assign[j].player, assign[j].role);
     }
   return { total: Math.max(0.05, Math.min(0.95, ind + syn)), ind, syn };
 }
@@ -614,7 +626,7 @@ function optimize(topN = 10) {
       let permPairs = 0, champSynBound = 0;
       for (let i = 0; i < 5; i++)
         for (let j = i + 1; j < 5; j++) {
-          permPairs += playerPairAdj(perm[i], perm[j]);
+          permPairs += playerPairAdj(perm[i], ROLES[i], perm[j], ROLES[j]);
           const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
           champSynBound += pairBoostIdx[pk] || 0;
         }
@@ -929,7 +941,9 @@ function renderScore() {
     `<span class="info" tabindex="0">i<span class="tip">` +
     `Sum over every champ pair and player duo of how your actual shared-game record deviates ` +
     `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
-    `are small. Champ pairs are pilot-attributed: only games where these two players played ` +
+    `are small. Duo records are role-weighted: games where the pair played these exact roles ` +
+    `count fully, their games in other role combos count at ${OFF_ROLE_GAME_WEIGHT}x ` +
+    `(0 under "Role WRs only"). Champ pairs are pilot-attributed: only games where these two players played ` +
     `these two champions themselves count. Green: this group overperforms together. Red: you ` +
     `win less together than your individual stats predict. Caveat: pair and individual records ` +
     `come from the same games, so hot streaks inflate both.</span></span>`;
@@ -1031,7 +1045,8 @@ function renderRanked(results) {
     <th>Synergy<span class="info" tabindex="0">i<span class="tip">
       How much this group's actual shared-game record shifts the estimate: champ pairs (only
       games these two players piloted these two champs themselves) measured against their
-      average meta WR, player duos against 50%, shrunk when samples are small.
+      average meta WR, player duos against 50%, shrunk when samples are small. Duo games in
+      the assigned role combo count fully; the duo's other games are discounted.
       Green = you overperform together; red = you win less together than your individual stats
       predict.</span></span></th></tr>
     ${results.map((r, i) => `
@@ -1098,7 +1113,8 @@ function flexView(src) {
     })),
     playerPairs: src.playerPairs.map(pp => {
       const f = pp.q && pp.q["440"];
-      return f && f.games ? { a: pp.a, b: pp.b, games: f.games, wins: f.wins } : null;
+      return f && f.games ? { a: pp.a, b: pp.b, games: f.games, wins: f.wins,
+        roles: f.roles } : null;
     }).filter(Boolean),
     championPairs: src.championPairs.map(cp => {
       const f = cp.q && cp.q["440"];
