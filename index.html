@@ -364,6 +364,7 @@ const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role 
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const MASTERY_FLOOR = 30000;         // below this mastery a champ isn't considered a real pick
+const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actually logged games on
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
 let D = null;           // loaded dataset
@@ -519,12 +520,18 @@ function candidates(riotId, role, n = 3) {
     s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
     viable: roleViable(pool.get(cid), cid, role),
     mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= MASTERY_FLOOR,
+    played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
-  // Prefer viable + mastered; degrade gracefully so a slot is never empty.
-  const eligible = scored.filter(c => c.viable && c.mastered);
-  const viableOnly = scored.filter(c => c.viable);
-  const list = (eligible.length ? eligible : viableOnly.length ? viableOnly : scored)
-    .sort((a, b) => b.s - a.s);
+  // Prefer viable + mastered + a real game sample; degrade gracefully so a
+  // slot is never empty (some players have no champ with MIN_CHAMP_GAMES).
+  const tiers = [
+    scored.filter(c => c.viable && c.mastered && c.played),
+    scored.filter(c => c.viable && c.played),
+    scored.filter(c => c.viable && c.mastered),
+    scored.filter(c => c.viable),
+    scored,
+  ];
+  const list = tiers.find(t => t.length).sort((a, b) => b.s - a.s);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
 }
 
