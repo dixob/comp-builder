@@ -155,9 +155,13 @@ def main():
         lambda: champ_rec() | {"q": defaultdict(champ_rec)}))
     # Per-player overall record split by queue id (420 solo / 440 flex).
     queue_stats = defaultdict(lambda: defaultdict(lambda: {"games": 0, "wins": 0}))
-    # Tracked-player-pair synergy: games where two of our accounts shared a team.
-    pair_stats = defaultdict(lambda: {"games": 0, "wins": 0,
-                                      "q": defaultdict(lambda: {"games": 0, "wins": 0})})
+    # Tracked-player-pair synergy: games where two of our accounts shared a
+    # team. "roles" splits the record by the duo's role combination so the
+    # front-end can weight games in the assigned roles above the rest.
+    def pair_rec():
+        return {"games": 0, "wins": 0,
+                "roles": defaultdict(lambda: {"games": 0, "wins": 0})}
+    pair_stats = defaultdict(lambda: pair_rec() | {"q": defaultdict(pair_rec)})
     # Champion-pair synergy, pilot-attributed: only pairs where BOTH champions
     # were piloted by tracked accounts on the same team.  Champ-level pairs from
     # stranger teams would credit e.g. a teammate's Ezreal record to any of our
@@ -191,22 +195,25 @@ def main():
         for team_id in (100, 200):
             team = [p for p in parts if p["teamId"] == team_id]
             won = bool(team and team[0]["win"])
-            tracked = sorted(p["puuid"] for p in team if p["puuid"] in puuid_to_player)
-            for i in range(len(tracked)):
-                for j in range(i + 1, len(tracked)):
-                    key = (puuid_to_player[tracked[i]], puuid_to_player[tracked[j]])
-                    for s in (pair_stats[key], pair_stats[key]["q"][qid]):
-                        s["games"] += 1
-                        s["wins"] += won
             tracked_parts = sorted(
                 (p for p in team if p["puuid"] in puuid_to_player),
                 key=lambda p: (puuid_to_player[p["puuid"]], p["championId"]))
             for i in range(len(tracked_parts)):
                 for j in range(i + 1, len(tracked_parts)):
                     pi, pj = tracked_parts[i], tracked_parts[j]
-                    key = (puuid_to_player[pi["puuid"]], pi["championId"],
-                           puuid_to_player[pj["puuid"]], pj["championId"])
-                    for cp in (champ_pair_stats[key], champ_pair_stats[key]["q"][qid]):
+                    key = (puuid_to_player[pi["puuid"]], puuid_to_player[pj["puuid"]])
+                    # role combo is oriented to the (a, b) key order above
+                    combo = ((pi.get("teamPosition") or "UNKNOWN") + "|" +
+                             (pj.get("teamPosition") or "UNKNOWN"))
+                    for s in (pair_stats[key], pair_stats[key]["q"][qid]):
+                        s["games"] += 1
+                        s["wins"] += won
+                        r = s["roles"][combo]
+                        r["games"] += 1
+                        r["wins"] += won
+                    ckey = (puuid_to_player[pi["puuid"]], pi["championId"],
+                            puuid_to_player[pj["puuid"]], pj["championId"])
+                    for cp in (champ_pair_stats[ckey], champ_pair_stats[ckey]["q"][qid]):
                         cp["games"] += 1
                         cp["wins"] += won
 
@@ -230,7 +237,10 @@ def main():
         "players": players,
         "playerPairs": [
             {"a": a, "b": b, "games": s["games"], "wins": s["wins"],
-             "q": {str(q): dict(v) for q, v in s["q"].items()}}
+             "roles": {k: dict(v) for k, v in s["roles"].items()},
+             "q": {str(q): {"games": v["games"], "wins": v["wins"],
+                            "roles": {k: dict(r) for k, r in v["roles"].items()}}
+                   for q, v in s["q"].items()}}
             for (a, b), s in pair_stats.items()
         ],
         "championPairs": [
