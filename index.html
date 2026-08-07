@@ -143,6 +143,10 @@
     background: rgba(227,177,63,0.12);
   }
   .lowdata { display: block; font-size: 11px; color: #d9a32f; opacity: 0.85; margin-top: 1px; }
+  .mfloor { margin-top: 14px; }
+  .mfloor label { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
+  .mfloor label b { color: var(--gold); }
+  .mfloor input[type="range"] { width: 100%; accent-color: var(--gold); cursor: pointer; }
 
   /* ---- win-rate hero ---- */
   .hero-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -376,7 +380,6 @@ const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this r
 const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
-const MASTERY_FLOOR = 30000;         // below this mastery a champ isn't considered a real pick
 const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actually logged games on
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
@@ -391,6 +394,9 @@ let included = {};      // riotId -> bool
 let indCache = {};      // memoized indScore — larger rosters make the search combinatorial
 let candCache = {};     // memoized candidates
 const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot cards
+// Mastery slider: champs below this many mastery points are filtered from a
+// player's candidate list (with the usual graceful fallback). Default 30k.
+let masteryFloor = +(localStorage.getItem("masteryFloor") ?? 30000);
 
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
@@ -532,7 +538,7 @@ function candidates(riotId, role, n = 3) {
     cid,
     s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
     viable: roleViable(pool.get(cid), cid, role),
-    mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= MASTERY_FLOOR,
+    mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= masteryFloor,
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
   // Prefer viable + mastered + a real game sample; degrade gracefully so a
@@ -717,6 +723,11 @@ function render() {
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
+          <div class="mfloor">
+            <label for="mfSlider">Mastery floor <b id="mfVal">${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
+            <input type="range" id="mfSlider" min="0" max="200000" step="10000" value="${masteryFloor}"
+              title="Champs below this mastery are filtered out of candidate lists">
+          </div>
           <button class="btn full" id="opt">Optimize comp</button>
         </div>
         <div class="card">
@@ -764,6 +775,15 @@ function render() {
       rankedTabs.overall = null;  // player pool changed — stale
       if (activeTab === "overall") switchTab("overall");
     }));
+  $("#mfSlider").addEventListener("input", e => {
+    masteryFloor = +e.target.value;
+    localStorage.setItem("masteryFloor", masteryFloor);
+    $("#mfVal").textContent = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
+    candCache = {};  // candidate lists depend on the floor
+    rankedTabs.assigned = rankedTabs.overall = null;
+    renderSlots();
+    renderScore();
+  });
   $("#opt").addEventListener("click", runOptimize);
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
