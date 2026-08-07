@@ -121,6 +121,16 @@
   .btn:hover { filter: brightness(1.07); box-shadow: 0 3px 16px rgba(227,177,63,0.4), inset 0 1px 0 rgba(255,255,255,0.35); }
   .btn:active { transform: translateY(1px) scale(0.99); box-shadow: 0 1px 4px rgba(227,177,63,0.2); }
   .btn.full { width: 100%; margin-top: 14px; }
+  #refreshBtn {
+    margin-left: auto; padding: 9px 16px;
+    color: var(--gold); background: none;
+    border: 1px solid rgba(227,177,63,0.45);
+    box-shadow: none;
+  }
+  #refreshBtn:disabled { opacity: 0.55; cursor: default; }
+  #refreshBtn .spin { display: inline-block; }
+  #refreshBtn.busy .spin { animation: rot 1s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
 
   /* ---- win-rate hero ---- */
   .hero-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -327,6 +337,7 @@
       <h1>Comp Builder</h1>
     </div>
     <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
+    <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
   </header>
   <div id="app"></div>
 </div>
@@ -337,8 +348,9 @@ const ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
 const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot", UTILITY: "Support" };
 
 // --- scoring model -------------------------------------------------------
-// Individual: champion win rate shrunk toward the champion's CURRENT-PATCH
-// meta win rate for that role (falls back to 50% if meta.json is absent),
+// Individual: champion win rate (in-role games full weight, other-role games
+// discounted) shrunk toward the champion's CURRENT-PATCH meta win rate for
+// that role (falls back to 50% if meta.json is absent),
 // + mastery familiarity bonus, − off-role penalty.
 // Synergy: pilot-attributed champ-pair WR deviation vs the pair's expected
 // meta WR (only games where these two PLAYERS piloted these two champs on the
@@ -349,7 +361,7 @@ const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
 const SYNERGY_WEIGHT = 0.5;      // how much a pair's WR deviation counts
 const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
 const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
-const ROLE_RECORD_MIN_GAMES = 5;     // use the player's champ-in-role record above this sample
+const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const MASTERY_FLOOR = 30000;         // below this mastery a champ isn't considered a real pick
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
@@ -407,19 +419,24 @@ function roleShare(champEntry, role) {
   return (champEntry.roles[role] || { games: 0 }).games / total;
 }
 
-// Score of one player playing one champion in one role. Uses the player's
-// champ-IN-ROLE record when the sample is big enough, else the champ-overall
-// record; both shrink toward the role-specific meta prior.
+// Score of one player playing one champion in one role. The record is the
+// champ-IN-ROLE games at full weight plus the champ's other-role games
+// discounted to OFF_ROLE_GAME_WEIGHT (mechanics transfer between roles, but
+// a jungle record shouldn't fully back a top-lane pick), shrunk toward the
+// role-specific meta prior.
 function indScore(riotId, champId, role) {
   const p = D.players.find(p => p.riotId === riotId);
   const entry = p.champions.find(c => c.championId === champId);
   const prior = metaWR(champId, role);
-  const roleRec = entry && entry.roles[role];
   let wr;
-  if (roleRec && roleRec.wins != null && roleRec.games >= ROLE_RECORD_MIN_GAMES)
-    wr = shrunk(roleRec.wins, roleRec.games, K_IND, prior);
-  else
-    wr = entry ? shrunk(entry.wins, entry.games, K_IND, prior) : prior;
+  if (entry) {
+    const roleRec = entry.roles[role] || { games: 0, wins: 0 };
+    const g = roleRec.games + (entry.games - roleRec.games) * OFF_ROLE_GAME_WEIGHT;
+    const w = roleRec.wins + (entry.wins - roleRec.wins) * OFF_ROLE_GAME_WEIGHT;
+    wr = shrunk(w, g, K_IND, prior);
+  } else {
+    wr = prior;
+  }
   const rolePen = entry && roleShare(entry, role) < 0.25 ? OFF_ROLE_PENALTY : 0;
   const comfort = ROLE_COMFORT_WEIGHT * (playerRoleShare(riotId, role) - 0.2);
   return wr + masteryBonus(riotId, champId) - rolePen + comfort;
@@ -926,39 +943,122 @@ function applyComp(r) {
 }
 
 // --- boot ----------------------------------------------------------------
-const metaLoad = fetch("data/meta.json").then(r => r.ok ? r.json() : null).catch(() => null);
-const profileLoad = fetch("data/profiles.json").then(r => r.ok ? r.json() : null).catch(() => null);
-fetch("data/players.json").then(r => {
-  if (!r.ok) throw new Error(r.status);
-  return r.json();
-}).then(async data => {
-  D = data;
-  META = await metaLoad;
-  PROFILES = await profileLoad;
+// Deployed Cloudflare Worker origin (e.g. "https://comp-builder-api.you.workers.dev").
+// When set, data loads live from the worker and the Refresh button appears;
+// when empty (or the worker is down), the committed data/*.json files serve.
+const WORKER_URL = "https://comp-builder-api.robertsandbox.workers.dev";
+let liveMode = false;
+
+const refreshedAt = iso => {
+  const d = new Date(iso), now = new Date();
+  if (now - d < 90e3) return "just now";
+  const t = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? t
+    : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t;
+};
+
+// (Re)build every index and re-render — used at boot and after each refresh.
+function applyData(players, meta, profiles) {
+  D = players; META = meta; PROFILES = profiles;
+  masteryIdx = {}; champPairIdx = {}; playerPairIdx = {};
+  for (const k of Object.keys(roleShareCache)) delete roleShareCache[k];
+  rankedTabs.assigned = rankedTabs.overall = null;
   for (const p of D.players) {
-    included[p.riotId] = true;
+    if (!(p.riotId in included)) included[p.riotId] = true;
     masteryIdx[p.riotId] = Object.fromEntries(p.mastery.map(m => [m.championId, m.points]));
   }
   for (const cp of D.championPairs)
     champPairIdx[cp.pa + "|" + cp.a + ":" + cp.pb + "|" + cp.b] = cp;
   for (const pp of D.playerPairs)
     playerPairIdx[[pp.a, pp.b].sort().join("|")] = pp;
+  renderChips();
+  render();
+}
+
+function renderChips() {
   const chips = [
     `patch <b>${D.ddragonVersion}</b>`,
     META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games` : `no meta data`,
-    `fetched ${D.generatedAt.slice(0, 10)}`,
+    liveMode ? `refreshed <b>${refreshedAt(D.generatedAt)}</b>` : `fetched ${D.generatedAt.slice(0, 10)}`,
   ];
   $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
-  render();
-}).catch(() => {
-  $("#sub").innerHTML = "";
-  $("#app").innerHTML = `<div class="card empty">
-    <p><b style="color:var(--ink-1)">No data yet.</b></p>
-    <p>1. Copy <code>config.example.json</code> → <code>config.json</code> and fill in your Riot API key + the 6 Riot IDs.</p>
-    <p>2. Run <code>python3 fetch_data.py</code></p>
-    <p>3. Reload this page.</p>
-  </div>`;
-});
+}
+
+async function loadLive() {
+  if (!WORKER_URL) return null;
+  try {
+    const r = await fetch(WORKER_URL + "/data");
+    const j = r.ok ? await r.json() : null;
+    return j && j.players ? j : null;
+  } catch { return null; }
+}
+
+async function loadStatic() {
+  const get = f => fetch("data/" + f).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [players, meta, profiles] = await Promise.all(
+    [get("players.json"), get("meta.json"), get("profiles.json")]);
+  return players ? { players, meta, profiles } : null;
+}
+
+const REFRESH_LABEL = `<span class="spin">⟳</span> Refresh`;
+
+// Ask the worker to pull the group's newest games, then re-render if anything
+// landed. Runs on page load too (silent = no feedback flash unless games were
+// found); the worker's 3-minute debounce makes that free.
+async function doRefresh(silent = false) {
+  const btn = $("#refreshBtn");
+  if (btn.disabled) return;
+  btn.disabled = true; btn.classList.add("busy");
+  const restore = () => { btn.innerHTML = REFRESH_LABEL; btn.disabled = false; };
+  const flash = msg => { btn.innerHTML = msg; setTimeout(restore, 2500); };
+  try {
+    // keep pulling until the worker has caught up (it merges in small batches)
+    let added = 0, res;
+    do {
+      res = await fetch(WORKER_URL + "/refresh", { method: "POST" }).then(r => r.json());
+      added += res.added || 0;
+    } while (res.remaining > 0);
+    if (added) {
+      const fresh = await loadLive();
+      if (fresh) applyData(fresh.players, fresh.meta, fresh.profiles);
+    } else if (res.lastRefresh) {
+      // nothing new, but the server did just check — reflect that
+      D.generatedAt = res.lastRefresh;
+      renderChips();
+    }
+    btn.classList.remove("busy");
+    if (silent && !added) return restore();
+    flash(res.error ? "Refresh failed" : added ? `+${added} game${added > 1 ? "s" : ""}` : "Up to date");
+  } catch {
+    btn.classList.remove("busy");
+    if (silent) return restore();
+    flash("Refresh failed");
+  }
+}
+
+function initRefreshButton() {
+  const btn = $("#refreshBtn");
+  btn.hidden = false;
+  btn.addEventListener("click", () => doRefresh());
+}
+
+(async () => {
+  const live = await loadLive();
+  liveMode = !!live;
+  const data = live || await loadStatic();
+  if (!data) {
+    $("#sub").innerHTML = "";
+    $("#app").innerHTML = `<div class="card empty">
+      <p><b style="color:var(--ink-1)">No data yet.</b></p>
+      <p>1. Copy <code>config.example.json</code> → <code>config.json</code> and fill in your Riot API key + the 6 Riot IDs.</p>
+      <p>2. Run <code>python3 fetch_data.py</code></p>
+      <p>3. Reload this page.</p>
+    </div>`;
+    return;
+  }
+  applyData(data.players, data.meta, data.profiles);
+  if (liveMode) { initRefreshButton(); doRefresh(true); }
+})();
 </script>
 </body>
 </html>

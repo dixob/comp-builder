@@ -35,3 +35,34 @@ python3 fetch_meta.py                # current-patch meta win rates
 
 Commit the regenerated `data/*.json` and push. `config.json` is gitignored —
 never commit an API key.
+
+## Live mode (Cloudflare Worker)
+
+The site can instead load from a free-tier Cloudflare Worker that refreshes
+incrementally — a **Refresh** button appears in the header and pulls the
+group's newest games (5 most recent per player, merged into KV-stored
+aggregates; ~24 Riot calls worst case, 3-minute debounce). OP.GG meta and
+Data Dragon names refresh on a daily cron. The static `data/*.json` files
+stay as the fallback whenever the worker is unreachable.
+
+One-time deploy (needs a Riot **Personal** API key — dev keys expire daily):
+
+```
+cd worker
+npx wrangler login
+npx wrangler kv namespace create KV        # paste the printed id into wrangler.toml
+npx wrangler secret put RIOT_API_KEY
+npx wrangler secret put ADMIN_TOKEN        # any random string; guards /seed
+npx wrangler deploy                        # prints your workers.dev URL
+```
+
+Then seed it from the local data and point the front-end at it:
+
+```
+python3 build_seed.py
+curl -X POST "https://<your-worker>.workers.dev/seed" \
+     -H "x-admin-token: <ADMIN_TOKEN>" --data-binary @worker/seed_state.json
+```
+
+Set `WORKER_URL` in `index.html` to the worker URL, commit, push. Re-seed
+the same way if you ever change the roster or want to reset state.
