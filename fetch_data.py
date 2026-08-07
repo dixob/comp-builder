@@ -146,36 +146,46 @@ def main():
         matches.append(riot.match(mid))
 
     # Per-player per-champion stats, split by role. cs/secs feed cs-per-minute.
+    # "q" carries the same counters split by queue id so the front-end can
+    # score on a single queue (flex-only toggle).
+    def champ_rec():
+        return {"games": 0, "wins": 0, "cs": 0, "secs": 0,
+                "roles": defaultdict(lambda: {"games": 0, "wins": 0})}
     champ_stats = defaultdict(lambda: defaultdict(
-        lambda: {"games": 0, "wins": 0, "cs": 0, "secs": 0,
-                 "roles": defaultdict(lambda: {"games": 0, "wins": 0})}))
+        lambda: champ_rec() | {"q": defaultdict(champ_rec)}))
     # Per-player overall record split by queue id (420 solo / 440 flex).
     queue_stats = defaultdict(lambda: defaultdict(lambda: {"games": 0, "wins": 0}))
     # Tracked-player-pair synergy: games where two of our accounts shared a team.
-    pair_stats = defaultdict(lambda: {"games": 0, "wins": 0})
+    pair_stats = defaultdict(lambda: {"games": 0, "wins": 0,
+                                      "q": defaultdict(lambda: {"games": 0, "wins": 0})})
     # Champion-pair synergy, pilot-attributed: only pairs where BOTH champions
     # were piloted by tracked accounts on the same team.  Champ-level pairs from
     # stranger teams would credit e.g. a teammate's Ezreal record to any of our
     # players hovering Ezreal.
-    champ_pair_stats = defaultdict(lambda: {"games": 0, "wins": 0})
+    champ_pair_stats = defaultdict(lambda: {"games": 0, "wins": 0,
+                                            "q": defaultdict(lambda: {"games": 0, "wins": 0})})
 
     for m in matches:
         parts = m["info"]["participants"]
         dur = m["info"]["gameDuration"]
         if dur > 20000:  # pre-11.20 matches report milliseconds
             dur //= 1000
+        qid = m["info"]["queueId"]
         for p in parts:
             rid = puuid_to_player.get(p["puuid"])
             if rid:
-                s = champ_stats[rid][p["championId"]]
-                s["games"] += 1
-                s["wins"] += p["win"]
-                s["cs"] += p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
-                s["secs"] += dur
-                r = s["roles"][p.get("teamPosition") or "UNKNOWN"]
-                r["games"] += 1
-                r["wins"] += p["win"]
-                q = queue_stats[rid][m["info"]["queueId"]]
+                pos = p.get("teamPosition") or "UNKNOWN"
+                cs_val = p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
+                for s in (champ_stats[rid][p["championId"]],
+                          champ_stats[rid][p["championId"]]["q"][qid]):
+                    s["games"] += 1
+                    s["wins"] += p["win"]
+                    s["cs"] += cs_val
+                    s["secs"] += dur
+                    r = s["roles"][pos]
+                    r["games"] += 1
+                    r["wins"] += p["win"]
+                q = queue_stats[rid][qid]
                 q["games"] += 1
                 q["wins"] += p["win"]
         for team_id in (100, 200):
@@ -185,8 +195,9 @@ def main():
             for i in range(len(tracked)):
                 for j in range(i + 1, len(tracked)):
                     key = (puuid_to_player[tracked[i]], puuid_to_player[tracked[j]])
-                    pair_stats[key]["games"] += 1
-                    pair_stats[key]["wins"] += won
+                    for s in (pair_stats[key], pair_stats[key]["q"][qid]):
+                        s["games"] += 1
+                        s["wins"] += won
             tracked_parts = sorted(
                 (p for p in team if p["puuid"] in puuid_to_player),
                 key=lambda p: (puuid_to_player[p["puuid"]], p["championId"]))
@@ -195,14 +206,18 @@ def main():
                     pi, pj = tracked_parts[i], tracked_parts[j]
                     key = (puuid_to_player[pi["puuid"]], pi["championId"],
                            puuid_to_player[pj["puuid"]], pj["championId"])
-                    cp = champ_pair_stats[key]
-                    cp["games"] += 1
-                    cp["wins"] += won
+                    for cp in (champ_pair_stats[key], champ_pair_stats[key]["q"][qid]):
+                        cp["games"] += 1
+                        cp["wins"] += won
+
+    def rec_out(s):
+        return {"games": s["games"], "wins": s["wins"], "cs": s["cs"],
+                "secs": s["secs"], "roles": dict(s["roles"])}
 
     for p in players:
         p["champions"] = [
-            {"championId": cid, "games": s["games"], "wins": s["wins"],
-             "cs": s["cs"], "secs": s["secs"], "roles": dict(s["roles"])}
+            {"championId": cid, **rec_out(s),
+             "q": {str(qid): rec_out(t) for qid, t in s["q"].items()}}
             for cid, s in sorted(champ_stats[p["riotId"]].items(), key=lambda kv: -kv[1]["games"])
         ]
         p["queues"] = {str(qid): s for qid, s in queue_stats[p["riotId"]].items()}
@@ -214,10 +229,13 @@ def main():
         "champions": {str(k): v for k, v in champs.items()},
         "players": players,
         "playerPairs": [
-            {"a": a, "b": b, **s} for (a, b), s in pair_stats.items()
+            {"a": a, "b": b, "games": s["games"], "wins": s["wins"],
+             "q": {str(q): dict(v) for q, v in s["q"].items()}}
+            for (a, b), s in pair_stats.items()
         ],
         "championPairs": [
-            {"pa": pa, "a": a, "pb": pb, "b": b, **s}
+            {"pa": pa, "a": a, "pb": pb, "b": b, "games": s["games"], "wins": s["wins"],
+             "q": {str(q): dict(v) for q, v in s["q"].items()}}
             for (pa, a, pb, b), s in champ_pair_stats.items() if s["games"] >= 2
         ],
     }

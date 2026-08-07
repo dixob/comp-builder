@@ -75,6 +75,7 @@ function mergeMatch(state, m) {
   for (const a of state.config.riotIds) ridOf[a.puuid] = a.riotId;
   let dur = m.info.gameDuration;
   if (dur > 20000) dur = Math.floor(dur / 1000); // pre-11.20 matches report ms
+  const qid = m.info.queueId;
 
   for (const p of parts) {
     // combat profiles count every participant — a champ's kit is intrinsic
@@ -86,12 +87,17 @@ function mergeMatch(state, m) {
     const rid = ridOf[p.puuid];
     if (!rid) continue;
     const pl = state.players[rid];
-    const c = pl.champs[p.championId] ??= { games: 0, wins: 0, cs: 0, secs: 0, roles: {} };
-    bump(c, p.win);
-    c.cs = (c.cs || 0) + (p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0);
-    c.secs = (c.secs || 0) + dur;
-    bump(c.roles[p.teamPosition || "UNKNOWN"] ??= { games: 0, wins: 0 }, p.win);
-    bump(pl.queues[m.info.queueId] ??= { games: 0, wins: 0 }, p.win);
+    const pos = p.teamPosition || "UNKNOWN";
+    const csVal = (p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0);
+    const c = pl.champs[p.championId] ??= { games: 0, wins: 0, cs: 0, secs: 0, roles: {}, q: {} };
+    const cq = (c.q ??= {})[qid] ??= { games: 0, wins: 0, cs: 0, secs: 0, roles: {} };
+    for (const s of [c, cq]) {
+      bump(s, p.win);
+      s.cs = (s.cs || 0) + csVal;
+      s.secs = (s.secs || 0) + dur;
+      bump(s.roles[pos] ??= { games: 0, wins: 0 }, p.win);
+    }
+    bump(pl.queues[qid] ??= { games: 0, wins: 0 }, p.win);
   }
 
   for (const teamId of [100, 200]) {
@@ -105,10 +111,14 @@ function mergeMatch(state, m) {
     for (let i = 0; i < tracked.length; i++)
       for (let j = i + 1; j < tracked.length; j++) {
         const [pi, pj] = [tracked[i], tracked[j]];
-        bump(state.playerPairs[[ridOf[pi.puuid], ridOf[pj.puuid]].sort().join("|")] ??=
-          { games: 0, wins: 0 }, won);
-        bump(state.champPairs[`${ridOf[pi.puuid]}|${pi.championId}:${ridOf[pj.puuid]}|${pj.championId}`] ??=
-          { games: 0, wins: 0 }, won);
+        const pp = state.playerPairs[[ridOf[pi.puuid], ridOf[pj.puuid]].sort().join("|")] ??=
+          { games: 0, wins: 0, q: {} };
+        const cp = state.champPairs[`${ridOf[pi.puuid]}|${pi.championId}:${ridOf[pj.puuid]}|${pj.championId}`] ??=
+          { games: 0, wins: 0, q: {} };
+        for (const s of [pp, cp]) {
+          bump(s, won);
+          bump((s.q ??= {})[qid] ??= { games: 0, wins: 0 }, won);
+        }
       }
   }
 }
@@ -154,7 +164,7 @@ function deriveData(state) {
       mastery: pl.mastery,
       champions: Object.entries(pl.champs)
         .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins,
-          cs: s.cs || 0, secs: s.secs || 0, roles: s.roles }))
+          cs: s.cs || 0, secs: s.secs || 0, roles: s.roles, q: s.q || {} }))
         .sort((a, b) => b.games - a.games),
       queues: pl.queues,
     };
@@ -166,13 +176,13 @@ function deriveData(state) {
       champions: state.championNames,
       players,
       playerPairs: Object.entries(state.playerPairs)
-        .map(([k, s]) => { const [a, b] = k.split("|"); return { a, b, ...s }; }),
+        .map(([k, s]) => { const [a, b] = k.split("|"); return { a, b, ...s, q: s.q || {} }; }),
       championPairs: Object.entries(state.champPairs)
         .filter(([, s]) => s.games >= 2)
         .map(([k, s]) => {
           const [x, y] = k.split(":");
           const [pa, a] = x.split("|"), [pb, b] = y.split("|");
-          return { pa, a: +a, pb, b: +b, ...s };
+          return { pa, a: +a, pb, b: +b, ...s, q: s.q || {} };
         }),
     },
     meta: state.meta,

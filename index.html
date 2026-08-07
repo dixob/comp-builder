@@ -131,6 +131,18 @@
   #refreshBtn .spin { display: inline-block; }
   #refreshBtn.busy .spin { animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
+  #flexToggle {
+    margin-left: 10px; padding: 9px 16px;
+    color: var(--ink-2); background: none;
+    border: 1px solid rgba(255,255,255,0.18);
+    box-shadow: none;
+  }
+  #flexToggle.active {
+    color: var(--gold);
+    border-color: rgba(227,177,63,0.6);
+    background: rgba(227,177,63,0.12);
+  }
+  .lowdata { display: block; font-size: 11px; color: #d9a32f; opacity: 0.85; margin-top: 1px; }
 
   /* ---- win-rate hero ---- */
   .hero-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -338,6 +350,7 @@
     </div>
     <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
     <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
+    <button id="flexToggle" class="btn" hidden title="Score and display using flex-queue games only">Flex only</button>
   </header>
   <div id="app"></div>
 </div>
@@ -691,10 +704,16 @@ function render() {
                   .join("<br>")
               : `${games ? pct(wins / games) : "–"} · ${games}g`;
             const [name, tag] = p.riotId.split("#");
+            const deep = p.champions.filter(c => c.games >= MIN_CHAMP_GAMES).length;
+            const note = deep === 0
+              ? `<span class="lowdata" title="No champion with ${MIN_CHAMP_GAMES}+ games — picks fall back to thin records and lean on the meta prior">no champs with ${MIN_CHAMP_GAMES}+ games</span>`
+              : deep < 5
+                ? `<span class="lowdata" title="Fewer champions with ${MIN_CHAMP_GAMES}+ games than roles — some picks fall back to thin records">only ${deep} champ${deep > 1 ? "s" : ""} with ${MIN_CHAMP_GAMES}+ games</span>`
+                : "";
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span></span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span>${note}</span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
@@ -1016,6 +1035,39 @@ function applyComp(r) {
 // when empty (or the worker is down), the committed data/*.json files serve.
 const WORKER_URL = "https://comp-builder-api.robertsandbox.workers.dev";
 let liveMode = false;
+let RAW = null;         // last-loaded full payload {players, meta, profiles}
+let flexOnly = localStorage.getItem("flexOnly") === "1";
+
+// Flex-only view: every champ record, role record, and synergy pair rebuilt
+// from the per-queue ("q") counters for flex (440) alone. Scoring code is
+// untouched — it just sees a smaller dataset.
+function flexView(src) {
+  return {
+    ...src,
+    players: src.players.map(p => ({
+      ...p,
+      champions: p.champions.map(c => {
+        const f = c.q && c.q["440"];
+        return f && f.games ? { championId: c.championId, games: f.games, wins: f.wins,
+          cs: f.cs || 0, secs: f.secs || 0, roles: f.roles || {} } : null;
+      }).filter(Boolean).sort((a, b) => b.games - a.games),
+      queues: Object.fromEntries(Object.entries(p.queues || {}).filter(([q]) => q === "440")),
+    })),
+    playerPairs: src.playerPairs.map(pp => {
+      const f = pp.q && pp.q["440"];
+      return f && f.games ? { a: pp.a, b: pp.b, games: f.games, wins: f.wins } : null;
+    }).filter(Boolean),
+    championPairs: src.championPairs.map(cp => {
+      const f = cp.q && cp.q["440"];
+      return f && f.games >= 2 ? { pa: cp.pa, a: cp.a, pb: cp.pb, b: cp.b,
+        games: f.games, wins: f.wins } : null;
+    }).filter(Boolean),
+  };
+}
+
+function applyCurrent() {
+  applyData(flexOnly ? flexView(RAW.players) : RAW.players, RAW.meta, RAW.profiles);
+}
 
 const refreshedAt = iso => {
   const d = new Date(iso), now = new Date();
@@ -1050,6 +1102,7 @@ function renderChips() {
     META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games` : `no meta data`,
     liveMode ? `refreshed <b>${refreshedAt(D.generatedAt)}</b>` : `fetched ${D.generatedAt.slice(0, 10)}`,
   ];
+  if (flexOnly) chips.push(`<b>flex games only</b>`);
   $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
 }
 
@@ -1089,7 +1142,7 @@ async function doRefresh(silent = false) {
     } while (res.remaining > 0);
     if (added) {
       const fresh = await loadLive();
-      if (fresh) applyData(fresh.players, fresh.meta, fresh.profiles);
+      if (fresh) { RAW = fresh; applyCurrent(); }
     } else if (res.lastRefresh) {
       // nothing new, but the server did just check — reflect that
       D.generatedAt = res.lastRefresh;
@@ -1111,6 +1164,20 @@ function initRefreshButton() {
   btn.addEventListener("click", () => doRefresh());
 }
 
+function initFlexToggle() {
+  const t = $("#flexToggle");
+  // needs per-queue counters in the data — hide against a pre-split dataset
+  if (!RAW.players.players.some(p => p.champions.some(c => c.q))) return;
+  t.hidden = false;
+  t.classList.toggle("active", flexOnly);
+  t.addEventListener("click", () => {
+    flexOnly = !flexOnly;
+    localStorage.setItem("flexOnly", flexOnly ? "1" : "0");
+    t.classList.toggle("active", flexOnly);
+    applyCurrent();
+  });
+}
+
 (async () => {
   const live = await loadLive();
   liveMode = !!live;
@@ -1125,7 +1192,9 @@ function initRefreshButton() {
     </div>`;
     return;
   }
-  applyData(data.players, data.meta, data.profiles);
+  RAW = data;
+  applyCurrent();
+  initFlexToggle();
   if (liveMode) { initRefreshButton(); doRefresh(true); }
 })();
 </script>

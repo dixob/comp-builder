@@ -49,8 +49,10 @@ def main():
         }
         for p in src["players"]
     }
-    player_pairs = defaultdict(lambda: {"games": 0, "wins": 0})
-    champ_pairs = defaultdict(lambda: {"games": 0, "wins": 0})
+    def pair_rec():
+        return {"games": 0, "wins": 0, "q": {}}
+    player_pairs = defaultdict(pair_rec)
+    champ_pairs = defaultdict(pair_rec)
     profile_sums = defaultdict(lambda: {k: 0 for k in PROFILE_FIELDS} | {"games": 0})
     processed = []
 
@@ -62,6 +64,7 @@ def main():
         dur = m["info"]["gameDuration"]
         if dur > 20000:  # pre-11.20 matches report milliseconds
             dur //= 1000
+        qid = str(m["info"]["queueId"])
         for p in parts:
             ps = profile_sums[p["championId"]]
             ps["games"] += 1
@@ -73,16 +76,20 @@ def main():
                 continue
             pl = players[rid]
             c = pl["champs"].setdefault(str(p["championId"]),
-                                        {"games": 0, "wins": 0, "cs": 0, "secs": 0, "roles": {}})
-            c["games"] += 1
-            c["wins"] += p["win"]
-            c["cs"] += p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
-            c["secs"] += dur
-            r = c["roles"].setdefault(p.get("teamPosition") or "UNKNOWN",
-                                      {"games": 0, "wins": 0})
-            r["games"] += 1
-            r["wins"] += p["win"]
-            q = pl["queues"].setdefault(str(m["info"]["queueId"]), {"games": 0, "wins": 0})
+                                        {"games": 0, "wins": 0, "cs": 0, "secs": 0,
+                                         "roles": {}, "q": {}})
+            pos = p.get("teamPosition") or "UNKNOWN"
+            cs_val = p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
+            for s in (c, c["q"].setdefault(qid, {"games": 0, "wins": 0, "cs": 0,
+                                                 "secs": 0, "roles": {}})):
+                s["games"] += 1
+                s["wins"] += p["win"]
+                s["cs"] += cs_val
+                s["secs"] += dur
+                r = s["roles"].setdefault(pos, {"games": 0, "wins": 0})
+                r["games"] += 1
+                r["wins"] += p["win"]
+            q = pl["queues"].setdefault(qid, {"games": 0, "wins": 0})
             q["games"] += 1
             q["wins"] += p["win"]
 
@@ -97,12 +104,12 @@ def main():
                 for j in range(i + 1, len(tracked)):
                     pi, pj = tracked[i], tracked[j]
                     pk = "|".join(sorted([rid_of[pi["puuid"]], rid_of[pj["puuid"]]]))
-                    player_pairs[pk]["games"] += 1
-                    player_pairs[pk]["wins"] += won
                     ck = (f"{rid_of[pi['puuid']]}|{pi['championId']}:"
                           f"{rid_of[pj['puuid']]}|{pj['championId']}")
-                    champ_pairs[ck]["games"] += 1
-                    champ_pairs[ck]["wins"] += won
+                    for s in (player_pairs[pk], player_pairs[pk]["q"].setdefault(qid, {"games": 0, "wins": 0}),
+                              champ_pairs[ck], champ_pairs[ck]["q"].setdefault(qid, {"games": 0, "wins": 0})):
+                        s["games"] += 1
+                        s["wins"] += won
 
     state = {
         "config": {
