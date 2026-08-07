@@ -134,13 +134,15 @@
   #refreshBtn .spin { display: inline-block; }
   #refreshBtn.busy .spin { animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
-  #flexToggle, #roleToggle {
-    margin-left: 10px; padding: 9px 16px;
+  #flexToggle, #roleToggle { margin-left: 10px; }
+  /* shared look for the header toggles and their board-head mirrors */
+  .toggle {
+    padding: 9px 16px;
     color: var(--ink-2); background: none;
     border: 1px solid rgba(255,255,255,0.18);
     box-shadow: none;
   }
-  #flexToggle.active, #roleToggle.active {
+  .toggle.active {
     color: var(--gold);
     border-color: rgba(227,177,63,0.6);
     background: rgba(227,177,63,0.12);
@@ -186,8 +188,8 @@
   .neg { color: var(--bad); font-weight: 650; }
 
   /* ---- draft board ---- */
-  .board-head { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
-  .board-head .hint { flex: 1; min-width: 220px; margin: 0; }
+  .board-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .board-head .mfloor { margin-top: 0; flex: 1 1 170px; max-width: 280px; margin-left: auto; }
   .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
   @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }
   .slot {
@@ -356,8 +358,9 @@
     .player { padding: 10px 8px; }
     .player input { width: 18px; height: 18px; }
     .hero-num { font-size: 42px; }
-    .board-head .btn { width: 100%; }
-    .board-head .hint { min-width: 0; }
+    #optChamps { width: 100%; }
+    .board-head .toggle { flex: 1; }
+    .board-head .mfloor { flex-basis: 100%; max-width: none; margin-left: 0; }
     /* slots become compact rows so the whole comp fits one screen */
     .roles { grid-template-columns: 1fr; gap: 8px; }
     .slot {
@@ -415,8 +418,8 @@
     </div>
     <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
     <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
-    <button id="flexToggle" class="btn" hidden title="Score and display using flex-queue games only">Flex only</button>
-    <button id="roleToggle" class="btn" title="Champion win rates count only games played in the assigned role">Role WR</button>
+    <button id="flexToggle" class="btn toggle" hidden title="Score and display using flex-queue games only">Flex only</button>
+    <button id="roleToggle" class="btn toggle" title="Champion win rates count only games played in the assigned role">Role WR</button>
   </header>
   <div id="app"></div>
 </div>
@@ -796,7 +799,7 @@ function render() {
             </label>`;
           }).join("")}
           <div class="mfloor">
-            <label for="mfSlider">Mastery floor <b id="mfVal">${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
+            <label for="mfSlider">Mastery floor <b data-mfval>${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
             <input type="range" id="mfSlider" min="0" max="200000" step="10000" value="${masteryFloor}"
               title="Champs below this mastery are filtered out of candidate lists">
           </div>
@@ -819,15 +822,16 @@ function render() {
       <div>
         <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
-          <span class="hint">Set each role's player below, then let the optimizer pick only the champions.
-            <span class="info" tabindex="0">i<span class="tip">
-            Each card's <b>score</b> is that pick's full composite: the player's win rate on the
-            champion in that role (their champ-in-role record when they have 5+ games there,
-            else their overall champ record), shrunk toward the champion's current-patch meta
-            win rate for the role; plus a mastery bonus (up to +3% at 200k points) and role
-            comfort (how much of their games are in this role); minus penalties for off-role
-            picks and champs the role's meta doesn't support. Synergy is not in this number —
-            it belongs to pairs and shows in the breakdown above.</span></span></span>
+          <button class="btn toggle ${flexOnly ? "active" : ""}" id="flexToggle2"
+            ${RAW && RAW.players.players.some(p => p.champions.some(c => c.q)) ? "" : "hidden"}
+            title="Score and display using flex-queue games only">Flex only</button>
+          <button class="btn toggle ${strictRole ? "active" : ""}" id="roleToggle2"
+            title="Champion win rates count only games played in the assigned role">Role WR</button>
+          <span class="mfloor">
+            <label for="mfSlider2">Mastery floor <b data-mfval>${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
+            <input type="range" id="mfSlider2" min="0" max="200000" step="10000" value="${masteryFloor}"
+              title="Champs below this mastery are filtered out of candidate lists">
+          </span>
         </div>
         <div class="roles" id="slots"></div>
         <div class="card" style="margin-top:18px">
@@ -847,16 +851,24 @@ function render() {
       rankedTabs.overall = null;  // player pool changed — stale
       if (activeTab === "overall") switchTab("overall");
     }));
-  $("#mfSlider").addEventListener("input", e => {
-    masteryFloor = +e.target.value;
+  // the squad card's slider and its board-head mirror drive the same state
+  const setMasteryFloor = v => {
+    masteryFloor = v;
     localStorage.setItem("masteryFloor", masteryFloor);
-    $("#mfVal").textContent = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
+    const label = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
+    document.querySelectorAll("[data-mfval]").forEach(el => el.textContent = label);
+    document.querySelectorAll("#mfSlider, #mfSlider2").forEach(el => { el.value = masteryFloor; });
     candCache = {};  // candidate lists depend on the floor
     rankedTabs.assigned = rankedTabs.overall = null;
     updateSquadNotes();
     renderSlots();
     renderScore();
-  });
+  };
+  $("#mfSlider").addEventListener("input", e => setMasteryFloor(+e.target.value));
+  $("#mfSlider2").addEventListener("input", e => setMasteryFloor(+e.target.value));
+  // mirrors delegate to the canonical header toggles
+  $("#flexToggle2").addEventListener("click", () => $("#flexToggle").click());
+  $("#roleToggle2").addEventListener("click", () => $("#roleToggle").click());
   $("#opt").addEventListener("click", runOptimize);
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
@@ -1292,6 +1304,8 @@ function initRoleToggle() {
     strictRole = !strictRole;
     localStorage.setItem("strictRole", strictRole ? "1" : "0");
     t.classList.toggle("active", strictRole);
+    const m = $("#roleToggle2");
+    if (m) m.classList.toggle("active", strictRole);
     indCache = {}; candCache = {};  // scores depend on the mode
     rankedTabs.assigned = rankedTabs.overall = null;
     renderChips(); renderSlots(); renderScore();
