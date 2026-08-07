@@ -145,9 +145,10 @@ def main():
             print(f"  {i}/{len(all_match_ids)}")
         matches.append(riot.match(mid))
 
-    # Per-player per-champion stats, split by role.
+    # Per-player per-champion stats, split by role. cs/secs feed cs-per-minute.
     champ_stats = defaultdict(lambda: defaultdict(
-        lambda: {"games": 0, "wins": 0, "roles": defaultdict(lambda: {"games": 0, "wins": 0})}))
+        lambda: {"games": 0, "wins": 0, "cs": 0, "secs": 0,
+                 "roles": defaultdict(lambda: {"games": 0, "wins": 0})}))
     # Per-player overall record split by queue id (420 solo / 440 flex).
     queue_stats = defaultdict(lambda: defaultdict(lambda: {"games": 0, "wins": 0}))
     # Tracked-player-pair synergy: games where two of our accounts shared a team.
@@ -160,12 +161,17 @@ def main():
 
     for m in matches:
         parts = m["info"]["participants"]
+        dur = m["info"]["gameDuration"]
+        if dur > 20000:  # pre-11.20 matches report milliseconds
+            dur //= 1000
         for p in parts:
             rid = puuid_to_player.get(p["puuid"])
             if rid:
                 s = champ_stats[rid][p["championId"]]
                 s["games"] += 1
                 s["wins"] += p["win"]
+                s["cs"] += p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
+                s["secs"] += dur
                 r = s["roles"][p.get("teamPosition") or "UNKNOWN"]
                 r["games"] += 1
                 r["wins"] += p["win"]
@@ -195,7 +201,8 @@ def main():
 
     for p in players:
         p["champions"] = [
-            {"championId": cid, "games": s["games"], "wins": s["wins"], "roles": dict(s["roles"])}
+            {"championId": cid, "games": s["games"], "wins": s["wins"],
+             "cs": s["cs"], "secs": s["secs"], "roles": dict(s["roles"])}
             for cid, s in sorted(champ_stats[p["riotId"]].items(), key=lambda kv: -kv[1]["games"])
         ]
         p["queues"] = {str(qid): s for qid, s in queue_stats[p["riotId"]].items()}

@@ -59,6 +59,9 @@ def main():
         processed.append(m["metadata"]["matchId"])
         parts = m["info"]["participants"]
 
+        dur = m["info"]["gameDuration"]
+        if dur > 20000:  # pre-11.20 matches report milliseconds
+            dur //= 1000
         for p in parts:
             ps = profile_sums[p["championId"]]
             ps["games"] += 1
@@ -70,9 +73,11 @@ def main():
                 continue
             pl = players[rid]
             c = pl["champs"].setdefault(str(p["championId"]),
-                                        {"games": 0, "wins": 0, "roles": {}})
+                                        {"games": 0, "wins": 0, "cs": 0, "secs": 0, "roles": {}})
             c["games"] += 1
             c["wins"] += p["win"]
+            c["cs"] += p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
+            c["secs"] += dur
             r = c["roles"].setdefault(p.get("teamPosition") or "UNKNOWN",
                                       {"games": 0, "wins": 0})
             r["games"] += 1

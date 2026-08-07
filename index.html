@@ -374,6 +374,9 @@ let champPairIdx = {};  // "rid|cid:rid|cid" -> {games, wins} (pilot-attributed)
 let playerPairIdx = {}; // "a|b" -> {games, wins}
 let slots = ROLES.map(() => ({ player: null, champ: null }));
 let included = {};      // riotId -> bool
+let indCache = {};      // memoized indScore — larger rosters make the search combinatorial
+let candCache = {};     // memoized candidates
+const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot cards
 
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
@@ -425,6 +428,8 @@ function roleShare(champEntry, role) {
 // a jungle record shouldn't fully back a top-lane pick), shrunk toward the
 // role-specific meta prior.
 function indScore(riotId, champId, role) {
+  const ck = riotId + "|" + champId + "|" + role;
+  if (ck in indCache) return indCache[ck];
   const p = D.players.find(p => p.riotId === riotId);
   const entry = p.champions.find(c => c.championId === champId);
   const prior = metaWR(champId, role);
@@ -439,21 +444,37 @@ function indScore(riotId, champId, role) {
   }
   const rolePen = entry && roleShare(entry, role) < 0.25 ? OFF_ROLE_PENALTY : 0;
   const comfort = ROLE_COMFORT_WEIGHT * (playerRoleShare(riotId, role) - 0.2);
-  return wr + masteryBonus(riotId, champId) - rolePen + comfort;
+  return indCache[ck] = wr + masteryBonus(riotId, champId) - rolePen + comfort;
 }
 
 // A and B are assign entries ({player, champ}): the pair record only counts
 // games where these two players piloted these two champions themselves —
 // someone else's games on the same champion are not this player's synergy.
-function champPairAdj(A, B) {
-  const [x, y] = [[A.player, A.champ], [B.player, B.champ]]
-    .sort((p, q) => p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : p[1] - q[1]);
-  const s = champPairIdx[x[0] + "|" + x[1] + ":" + y[0] + "|" + y[1]];
+function champPairAdjRaw(pa, ca, pb, cb) {
+  const key = (pa < pb || (pa === pb && ca <= cb))
+    ? pa + "|" + ca + ":" + pb + "|" + cb
+    : pb + "|" + cb + ":" + pa + "|" + ca;
+  const s = champPairIdx[key];
   if (!s) return 0;
   // Expected pair WR is the mean of the two champs' meta WRs, so champion
   // strength isn't double-counted as "synergy".
-  const expected = (metaWR(A.champ, null) + metaWR(B.champ, null)) / 2;
+  const expected = (metaWR(ca, null) + metaWR(cb, null)) / 2;
   return (shrunk(s.wins, s.games, K_PAIR, expected) - expected) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
+}
+const champPairAdj = (A, B) => champPairAdjRaw(A.player, A.champ, B.player, B.champ);
+
+// Best positive champ-pair adjustment per player pair — an upper bound used
+// to prune whole role-permutations in optimize() before scoring 3^5 combos.
+let pairBoostIdx = null;
+function buildPairBoost() {
+  pairBoostIdx = {};
+  for (const key in champPairIdx) {
+    const [x, y] = key.split(":");
+    const [pa, ca] = x.split("|"), [pb, cb] = y.split("|");
+    const adj = champPairAdjRaw(pa, +ca, pb, +cb);
+    const pk = pa < pb ? pa + "|" + pb : pb + "|" + pa;
+    if (adj > (pairBoostIdx[pk] || 0)) pairBoostIdx[pk] = adj;
+  }
 }
 
 function playerPairAdj(a, b) {
@@ -487,6 +508,8 @@ function roleViable(champEntry, champId, role) {
 
 // Top champion candidates for a player in a role.
 function candidates(riotId, role, n = 3) {
+  const ck = riotId + "|" + role + "|" + n;
+  if (ck in candCache) return candCache[ck];
   const p = D.players.find(p => p.riotId === riotId);
   const pool = new Map();
   for (const c of p.champions) pool.set(c.championId, c);
@@ -502,14 +525,15 @@ function candidates(riotId, role, n = 3) {
   const viableOnly = scored.filter(c => c.viable);
   const list = (eligible.length ? eligible : viableOnly.length ? viableOnly : scored)
     .sort((a, b) => b.s - a.s);
-  return list.slice(0, n).map(c => c.cid);
+  return candCache[ck] = list.slice(0, n).map(c => c.cid);
 }
 
 // --- optimizer -----------------------------------------------------------
-function* combosOf5(arr) {
-  for (let skip = 0; skip < arr.length; skip++)
-    yield arr.filter((_, i) => i !== skip);
-  if (arr.length === 5) return;
+function* combosOf(arr, k) {
+  if (k === 0) { yield []; return; }
+  for (let i = 0; i <= arr.length - k; i++)
+    for (const rest of combosOf(arr.slice(i + 1), k - 1))
+      yield [arr[i], ...rest];
 }
 function* permutations(arr) {
   if (arr.length <= 1) { yield arr; return; }
@@ -540,21 +564,56 @@ function optimizeChamps(topN = 10) {
   return results.slice(0, topN);
 }
 
+// Full search over every 5-player subset × role permutation × candidate
+// champions. With 9+ players this is millions of combinations, so the inner
+// loop is allocation-free: scores are computed from cached numbers and a comp
+// object is only built when it beats the current top-N floor.
 function optimize(topN = 10) {
   const pool = D.players.map(p => p.riotId).filter(r => included[r]);
   if (pool.length < 5) return [];
-  const results = [];
-  const playerSets = pool.length === 5 ? [pool] : [...combosOf5(pool)];
+  const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
+  const keep = topN * 6;  // headroom for the dedup pass below
+  let results = [], floor = -Infinity;
+  if (!pairBoostIdx) buildPairBoost();
   for (const five of playerSets) {
     for (const perm of permutations(five)) {
       const cands = perm.map((rid, i) => candidates(rid, ROLES[i]));
+      if (cands.some(c => !c.length)) continue;
+      // player-pair synergy is constant for this role assignment
+      let permPairs = 0, champSynBound = 0;
+      for (let i = 0; i < 5; i++)
+        for (let j = i + 1; j < 5; j++) {
+          permPairs += playerPairAdj(perm[i], perm[j]);
+          const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
+          champSynBound += pairBoostIdx[pk] || 0;
+        }
+      const ind = cands.map((cs, i) => cs.map(cid => indScore(perm[i], cid, ROLES[i])));
+      // upper bound for this whole role assignment — skip it if it can't place
+      let maxIndSum = 0;
+      for (const arr of ind) maxIndSum += Math.max(...arr);
+      if (maxIndSum / 5 + permPairs + champSynBound <= floor) continue;
       const idx = [0, 0, 0, 0, 0];
       while (true) {
-        const champs = idx.map((ci, i) => cands[i][ci]).filter(c => c !== undefined);
-        if (champs.length === 5 && new Set(champs).size === 5) {
-          const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
-          const sc = compScore(assign);
-          results.push({ assign, ...sc });
+        const c0 = cands[0][idx[0]], c1 = cands[1][idx[1]], c2 = cands[2][idx[2]],
+              c3 = cands[3][idx[3]], c4 = cands[4][idx[4]];
+        if (c0 !== c1 && c0 !== c2 && c0 !== c3 && c0 !== c4 && c1 !== c2 &&
+            c1 !== c3 && c1 !== c4 && c2 !== c3 && c2 !== c4 && c3 !== c4) {
+          const indMean = (ind[0][idx[0]] + ind[1][idx[1]] + ind[2][idx[2]]
+            + ind[3][idx[3]] + ind[4][idx[4]]) / 5;
+          let syn = permPairs;
+          for (let i = 0; i < 5; i++)
+            for (let j = i + 1; j < 5; j++)
+              syn += champPairAdjRaw(perm[i], cands[i][idx[i]], perm[j], cands[j][idx[j]]);
+          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
+          if (total > floor) {
+            const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
+            results.push({ assign, total, ind: indMean, syn });
+            if (results.length > keep * 4) {
+              results.sort((a, b) => b.total - a.total);
+              results.length = keep;
+              floor = results[keep - 1].total;
+            }
+          }
         }
         let d = 4;
         while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
@@ -741,6 +800,8 @@ function renderSlots() {
         if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
         const pts = (masteryIdx[s.player] || {})[s.champ];
         stat += `<br><span class="dim">mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}</span>`;
+        if (s.player === CS_MIN_PLAYER && e && e.secs)
+          stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
         stat += `<br><span class="scorechip">score ${pct(indScore(s.player, s.champ, role))}</span>`;
       }
     }
@@ -961,6 +1022,7 @@ const refreshedAt = iso => {
 function applyData(players, meta, profiles) {
   D = players; META = meta; PROFILES = profiles;
   masteryIdx = {}; champPairIdx = {}; playerPairIdx = {};
+  indCache = {}; candCache = {}; pairBoostIdx = null;
   for (const k of Object.keys(roleShareCache)) delete roleShareCache[k];
   rankedTabs.assigned = rankedTabs.overall = null;
   for (const p of D.players) {
@@ -994,7 +1056,7 @@ async function loadLive() {
 }
 
 async function loadStatic() {
-  const get = f => fetch("data/" + f).then(r => r.ok ? r.json() : null).catch(() => null);
+  const get = f => fetch("data/" + f, { cache: "no-cache" }).then(r => r.ok ? r.json() : null).catch(() => null);
   const [players, meta, profiles] = await Promise.all(
     [get("players.json"), get("meta.json"), get("profiles.json")]);
   return players ? { players, meta, profiles } : null;
