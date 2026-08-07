@@ -189,7 +189,8 @@
 
   /* ---- draft board ---- */
   .board-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
-  .board-head .mfloor { margin-top: 0; flex: 1 1 170px; max-width: 280px; margin-left: auto; }
+  .mirror-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .mirror-bar .mfloor { margin-top: 0; flex: 1 1 170px; max-width: 280px; margin-left: auto; }
   .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
   @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }
   .slot {
@@ -359,8 +360,8 @@
     .player input { width: 18px; height: 18px; }
     .hero-num { font-size: 42px; }
     #optChamps { width: 100%; }
-    .board-head .toggle { flex: 1; }
-    .board-head .mfloor { flex-basis: 100%; max-width: none; margin-left: 0; }
+    .mirror-bar .toggle { flex: 1; }
+    .mirror-bar .mfloor { flex-basis: 100%; max-width: none; margin-left: 0; }
     /* slots become compact rows so the whole comp fits one screen */
     .roles { grid-template-columns: 1fr; gap: 8px; }
     .slot {
@@ -396,7 +397,13 @@
     .ci { margin-right: 2px; }
     .ci img { width: 26px; height: 26px; }
     .syn-chip { font-size: 11px; padding: 3px 7px; }
-    .info .tip { width: min(270px, calc(100vw - 48px)); }
+    /* anchored tips get clipped by the table's scroll container and the
+       viewport on a phone — show them as a fixed overlay instead */
+    .info .tip {
+      position: fixed; left: 16px; right: 16px; width: auto;
+      top: 50%; bottom: auto; transform: translateY(-50%);
+      z-index: 50; font-size: 13px;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     tr.comp-row { animation: none; }
@@ -441,6 +448,10 @@ const K_IND = 8;        // shrinkage prior weight for individual champ WR
 const K_PAIR = 20;      // shrinkage for pair stats (small samples)
 const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
 const SYNERGY_WEIGHT = 0.5;      // how much a pair's WR deviation counts
+// The ten duo records in a 5-stack largely re-count the SAME games, so summing
+// them multiplies one shared win streak ~10x. This scales the sum back so ten
+// fully-overlapping pairs count the group's record roughly once.
+const PAIR_OVERLAP_DISCOUNT = 0.25;
 const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
 const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
@@ -581,7 +592,7 @@ function playerPairAdj(a, ra, b, rb) {
     g = rec.games + (s.games - rec.games) * offW;
     w = rec.wins + (s.wins - rec.wins) * offW;
   }
-  return (shrunk(w, g, K_PAIR) - 0.5) * SYNERGY_WEIGHT * (g / (g + 10));
+  return (shrunk(w, g, K_PAIR) - 0.5) * SYNERGY_WEIGHT * PAIR_OVERLAP_DISCOUNT * (g / (g + 10));
 }
 
 // Full comp score: mean individual + all pairwise synergy adjustments.
@@ -822,6 +833,9 @@ function render() {
       <div>
         <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
+        </div>
+        <div class="roles" id="slots"></div>
+        <div class="mirror-bar">
           <button class="btn toggle ${flexOnly ? "active" : ""}" id="flexToggle2"
             ${RAW && RAW.players.players.some(p => p.champions.some(c => c.q)) ? "" : "hidden"}
             title="Score and display using flex-queue games only">Flex only</button>
@@ -833,7 +847,6 @@ function render() {
               title="Champs below this mastery are filtered out of candidate lists">
           </span>
         </div>
-        <div class="roles" id="slots"></div>
         <div class="card" style="margin-top:18px">
           <h2 style="margin-bottom:14px">Top compositions
             <span class="tabs h2tabs">
@@ -1016,7 +1029,9 @@ function renderScore() {
     `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
     `are small. Duo records are role-weighted: games where the pair played these exact roles ` +
     `count fully, their games in other role combos count at ${OFF_ROLE_GAME_WEIGHT}x ` +
-    `(0 under "Role WRs only"). Champ pairs are pilot-attributed: only games where these two players played ` +
+    `(0 under "Role WRs only"). The duo sum is also scaled to ${PAIR_OVERLAP_DISCOUNT}x, because the ten ` +
+    `pair records in a five-stack largely re-count the same games. ` +
+    `Champ pairs are pilot-attributed: only games where these two players played ` +
     `these two champions themselves count. Green: this group overperforms together. Red: you ` +
     `win less together than your individual stats predict. Caveat: pair and individual records ` +
     `come from the same games, so hot streaks inflate both.</span></span>`;
