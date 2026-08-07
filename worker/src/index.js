@@ -73,6 +73,8 @@ function mergeMatch(state, m) {
   const parts = m.info.participants;
   const ridOf = {};
   for (const a of state.config.riotIds) ridOf[a.puuid] = a.riotId;
+  let dur = m.info.gameDuration;
+  if (dur > 20000) dur = Math.floor(dur / 1000); // pre-11.20 matches report ms
 
   for (const p of parts) {
     // combat profiles count every participant — a champ's kit is intrinsic
@@ -84,8 +86,10 @@ function mergeMatch(state, m) {
     const rid = ridOf[p.puuid];
     if (!rid) continue;
     const pl = state.players[rid];
-    const c = pl.champs[p.championId] ??= { games: 0, wins: 0, roles: {} };
+    const c = pl.champs[p.championId] ??= { games: 0, wins: 0, cs: 0, secs: 0, roles: {} };
     bump(c, p.win);
+    c.cs = (c.cs || 0) + (p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0);
+    c.secs = (c.secs || 0) + dur;
     bump(c.roles[p.teamPosition || "UNKNOWN"] ??= { games: 0, wins: 0 }, p.win);
     bump(pl.queues[m.info.queueId] ??= { games: 0, wins: 0 }, p.win);
   }
@@ -149,7 +153,8 @@ function deriveData(state) {
       profileIconId: pl.profileIconId,
       mastery: pl.mastery,
       champions: Object.entries(pl.champs)
-        .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins, roles: s.roles }))
+        .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins,
+          cs: s.cs || 0, secs: s.secs || 0, roles: s.roles }))
         .sort((a, b) => b.games - a.games),
       queues: pl.queues,
     };
