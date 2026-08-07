@@ -541,16 +541,16 @@ function candidates(riotId, role, n = 3) {
     mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= masteryFloor,
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
-  // Prefer viable + mastered + a real game sample; degrade gracefully so a
-  // slot is never empty (some players have no champ with MIN_CHAMP_GAMES).
+  // The mastery floor is a hard filter — below it a champ is simply not a
+  // pick for this player. Within the floor, prefer role-viable champs with a
+  // real game sample, degrading so the list stays useful.
+  const mastered = scored.filter(c => c.mastered);
   const tiers = [
-    scored.filter(c => c.viable && c.mastered && c.played),
-    scored.filter(c => c.viable && c.played),
-    scored.filter(c => c.viable && c.mastered),
-    scored.filter(c => c.viable),
-    scored,
+    mastered.filter(c => c.viable && c.played),
+    mastered.filter(c => c.viable),
+    mastered,
   ];
-  const list = tiers.find(t => t.length).sort((a, b) => b.s - a.s);
+  const list = (tiers.find(t => t.length) || []).sort((a, b) => b.s - a.s);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
 }
 
@@ -710,16 +710,10 @@ function render() {
                   .join("<br>")
               : `${games ? pct(wins / games) : "–"} · ${games}g`;
             const [name, tag] = p.riotId.split("#");
-            const deep = p.champions.filter(c => c.games >= MIN_CHAMP_GAMES).length;
-            const note = deep === 0
-              ? `<span class="lowdata" title="No champion with ${MIN_CHAMP_GAMES}+ games — picks fall back to thin records and lean on the meta prior">no champs with ${MIN_CHAMP_GAMES}+ games</span>`
-              : deep < 5
-                ? `<span class="lowdata" title="Fewer champions with ${MIN_CHAMP_GAMES}+ games than roles — some picks fall back to thin records">only ${deep} champ${deep > 1 ? "s" : ""} with ${MIN_CHAMP_GAMES}+ games</span>`
-                : "";
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span>${note}</span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span><span data-notes="${p.riotId}">${playerNotes(p)}</span></span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
@@ -781,6 +775,7 @@ function render() {
     $("#mfVal").textContent = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
     candCache = {};  // candidate lists depend on the floor
     rankedTabs.assigned = rankedTabs.overall = null;
+    updateSquadNotes();
     renderSlots();
     renderScore();
   });
@@ -809,6 +804,27 @@ function ensureIncluded(rids) {
   }
 }
 
+// Squad-list warnings: thin game samples, and champs cut by the mastery floor.
+function playerNotes(p) {
+  const notes = [];
+  const deep = p.champions.filter(c => c.games >= MIN_CHAMP_GAMES).length;
+  if (deep === 0) notes.push(`no champs with ${MIN_CHAMP_GAMES}+ games`);
+  else if (deep < 5) notes.push(`only ${deep} champ${deep > 1 ? "s" : ""} with ${MIN_CHAMP_GAMES}+ games`);
+  if (masteryFloor) {
+    const m = Object.values(masteryIdx[p.riotId] || {}).filter(pts => pts >= masteryFloor).length;
+    if (m === 0) notes.push(`no champs ≥ ${masteryFloor / 1000}k mastery`);
+    else if (m < 5) notes.push(`only ${m} champ${m > 1 ? "s" : ""} ≥ ${masteryFloor / 1000}k mastery`);
+  }
+  return notes.map(n => `<span class="lowdata">${n}</span>`).join("");
+}
+
+function updateSquadNotes() {
+  document.querySelectorAll("[data-notes]").forEach(el => {
+    const p = D.players.find(x => x.riotId === el.dataset.notes);
+    if (p) el.innerHTML = playerNotes(p);
+  });
+}
+
 function emptyIcon() {
   return `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z"/><circle cx="12" cy="12.4" r="3.2"/></svg>`;
@@ -826,6 +842,8 @@ function renderSlots() {
       comfortLine = `<div class="cstat dim" style="margin-bottom:6px">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
       const p = D.players.find(p => p.riotId === s.player);
       const cands = candidates(s.player, role, 15);
+      if (!cands.length && !s.champ)
+        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery floor</div>`;
       if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
       const opt = cid => `<option value="${cid}" ${s.champ === cid ? "selected" : ""}>${champName(cid)}</option>`;
       const playedThere = cands.filter(cid => {
