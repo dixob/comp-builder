@@ -131,13 +131,13 @@
   #refreshBtn .spin { display: inline-block; }
   #refreshBtn.busy .spin { animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
-  #flexToggle {
+  #flexToggle, #roleToggle {
     margin-left: 10px; padding: 9px 16px;
     color: var(--ink-2); background: none;
     border: 1px solid rgba(255,255,255,0.18);
     box-shadow: none;
   }
-  #flexToggle.active {
+  #flexToggle.active, #roleToggle.active {
     color: var(--gold);
     border-color: rgba(227,177,63,0.6);
     background: rgba(227,177,63,0.12);
@@ -355,6 +355,7 @@
     <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
     <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
     <button id="flexToggle" class="btn" hidden title="Score and display using flex-queue games only">Flex only</button>
+    <button id="roleToggle" class="btn" title="Champion win rates count only games played in the assigned role">Role WR</button>
   </header>
   <div id="app"></div>
 </div>
@@ -397,6 +398,9 @@ const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot 
 // Mastery slider: champs below this many mastery points are filtered from a
 // player's candidate list (with the usual graceful fallback). Default 30k.
 let masteryFloor = +(localStorage.getItem("masteryFloor") ?? 30000);
+// Strict role WRs: champion win rates count only games in the assigned role
+// (off-role games contribute nothing instead of OFF_ROLE_GAME_WEIGHT).
+let strictRole = localStorage.getItem("strictRole") === "1";
 
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
@@ -455,9 +459,10 @@ function indScore(riotId, champId, role) {
   const prior = metaWR(champId, role);
   let wr;
   if (entry) {
+    const offW = strictRole ? 0 : OFF_ROLE_GAME_WEIGHT;
     const roleRec = entry.roles[role] || { games: 0, wins: 0 };
-    const g = roleRec.games + (entry.games - roleRec.games) * OFF_ROLE_GAME_WEIGHT;
-    const w = roleRec.wins + (entry.wins - roleRec.wins) * OFF_ROLE_GAME_WEIGHT;
+    const g = roleRec.games + (entry.games - roleRec.games) * offW;
+    const w = roleRec.wins + (entry.wins - roleRec.wins) * offW;
     wr = shrunk(w, g, K_IND, prior);
   } else {
     wr = prior;
@@ -1141,6 +1146,7 @@ function renderChips() {
     liveMode ? `refreshed <b>${refreshedAt(D.generatedAt)}</b>` : `fetched ${D.generatedAt.slice(0, 10)}`,
   ];
   if (flexOnly) chips.push(`<b>flex games only</b>`);
+  if (strictRole) chips.push(`<b>role WRs only</b>`);
   $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
 }
 
@@ -1202,6 +1208,19 @@ function initRefreshButton() {
   btn.addEventListener("click", () => doRefresh());
 }
 
+function initRoleToggle() {
+  const t = $("#roleToggle");
+  t.classList.toggle("active", strictRole);
+  t.addEventListener("click", () => {
+    strictRole = !strictRole;
+    localStorage.setItem("strictRole", strictRole ? "1" : "0");
+    t.classList.toggle("active", strictRole);
+    indCache = {}; candCache = {};  // scores depend on the mode
+    rankedTabs.assigned = rankedTabs.overall = null;
+    renderChips(); renderSlots(); renderScore();
+  });
+}
+
 function initFlexToggle() {
   const t = $("#flexToggle");
   // needs per-queue counters in the data — hide against a pre-split dataset
@@ -1233,6 +1252,7 @@ function initFlexToggle() {
   RAW = data;
   applyCurrent();
   initFlexToggle();
+  initRoleToggle();
   if (liveMode) { initRefreshButton(); doRefresh(true); }
 })();
 </script>
