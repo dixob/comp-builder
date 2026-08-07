@@ -1,0 +1,13 @@
+name = "comp-builder-api"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Daily meta (OP.GG) + Data Dragon refresh, 09:00 UTC
+[triggers]
+crons = ["0 9 * * *"]
+
+# Create with: npx wrangler kv namespace create KV
+# then paste the id it prints here.
+[[kv_namespaces]]
+binding = "KV"
+id = "42195ef24a4943f8ae6b3a9773af63cf"
