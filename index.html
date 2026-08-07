@@ -358,7 +358,27 @@
     .hero-num { font-size: 42px; }
     .board-head .btn { width: 100%; }
     .board-head .hint { min-width: 0; }
-    .roles { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    /* slots become compact rows so the whole comp fits one screen */
+    .roles { grid-template-columns: 1fr; gap: 8px; }
+    .slot {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-areas: "img role role" "img psel csel" "img stat stat";
+      gap: 4px 10px; align-items: center;
+      padding: 10px 12px; text-align: left;
+    }
+    .slot h3 { grid-area: role; justify-content: flex-start; margin: 0; }
+    .slot select { margin: 0; }
+    .slot select[data-kind="player"] { grid-area: psel; }
+    .slot select[data-kind="champ"] { grid-area: csel; }
+    .slot .portrait-wrap, .slot .portrait-empty { grid-area: img; margin: 0; align-self: start; }
+    .slot .portrait, .slot .portrait-empty { width: 52px; height: 52px; }
+    .slot .portrait-wrap { width: 52px; }
+    .slot > .cstat { grid-area: stat; }
+    .slot > .cstat.dim { display: none; }  /* role-comfort hint — desktop only */
+    .slot .cstat br { display: none; }
+    .slot .cstat .dim, .slot .cstat .scorechip { margin-left: 8px; }
+    .slot .scorechip { margin-top: 0; }
     /* 16px stops iOS Safari's zoom-on-focus */
     select { font-size: 16px; padding: 9px 8px; }
     h2 { flex-wrap: wrap; }
