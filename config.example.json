@@ -11,5 +11,7 @@
   ],
   "matches_per_player": 60,
   "queue": 420,
-  "max_match_age_days": 365
+  "max_match_age_days": 365,
+  "worker_url": "",
+  "admin_token": ""
 }

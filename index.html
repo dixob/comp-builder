@@ -134,7 +134,7 @@
   #refreshBtn .spin { display: inline-block; }
   #refreshBtn.busy .spin { animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
-  #flexToggle, #roleToggle { margin-left: 10px; }
+  #flexToggle, #roleToggle, #draftToggle { margin-left: 10px; }
   /* shared look for the header toggles and their board-head mirrors */
   .toggle {
     padding: 9px 16px;
@@ -344,6 +344,42 @@
   .dmglegend { display: flex; gap: 14px; margin-top: 7px; font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
   .dmglegend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 
+  /* ---- draft mode ---- */
+  .draft-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .dlabel { flex: none; width: 52px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+  .dchip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600;
+    background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 3px 6px 3px 10px;
+  }
+  .dchip img { width: 20px; height: 20px; border-radius: 5px; }
+  .dchip.live { border-color: rgba(74,222,128,0.35); }
+  .dchip button {
+    font: inherit; background: none; border: none; cursor: pointer;
+    color: var(--ink-muted); padding: 0 4px; border-radius: 50%;
+  }
+  .dchip button:hover { color: var(--bad); }
+  .dchip select {
+    width: auto; font-size: 11px; padding: 2px 4px; margin: 0;
+    border-radius: 6px;
+  }
+  .dinput {
+    font: inherit; font-size: 13px; width: 150px;
+    padding: 6px 9px;
+    background: var(--surface-2); color: var(--ink-1);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .dinput:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ink-muted); margin-right: 5px; vertical-align: 1px;
+  }
+  .live-dot.on { background: var(--good); box-shadow: 0 0 6px rgba(74,222,128,0.7); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  .draft-state { font-size: 11px; font-weight: 400; color: var(--ink-muted); text-transform: none; letter-spacing: 0; }
+  .slot .banned-note { color: var(--bad); font-weight: 700; font-size: 12px; }
+
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--ink-muted); font-size: 13.5px; line-height: 1.7; }
   .empty svg { color: var(--line); margin-bottom: 10px; }
@@ -374,7 +410,7 @@
     h1 { font-size: 20px; }
     /* chips drop to their own row; the three buttons share the next one */
     .patchbar { order: 5; margin-left: 0; width: 100%; }
-    #refreshBtn, #flexToggle, #roleToggle {
+    #refreshBtn, #flexToggle, #roleToggle, #draftToggle {
       order: 6; flex: 1; margin-left: 0;
       padding: 9px 8px; font-size: 13px; white-space: nowrap;
     }
@@ -451,6 +487,7 @@
     <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
     <button id="flexToggle" class="btn toggle" hidden title="Score and display using flex-queue games only">Flex only</button>
     <button id="roleToggle" class="btn toggle" title="Champion win rates count only games played in the assigned role">Role WR</button>
+  <button id="draftToggle" class="btn toggle" title="Draft assist: bans and enemy picks filter the board (auto-synced when lcu_bridge.py runs)">Draft</button>
   </header>
   <div id="app"></div>
 </div>
@@ -513,6 +550,24 @@ const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= ma
 // (off-role games contribute nothing instead of OFF_ROLE_GAME_WEIGHT).
 let strictRole = localStorage.getItem("strictRole") === "1";
 
+// --- draft mode ------------------------------------------------------------
+// Bans and enemy picks (entered manually or streamed from lcu_bridge.py via
+// the worker) become unavailable, and known lane opponents nudge pick scores
+// with OP.GG matchup records.
+let draftMode = localStorage.getItem("draftMode") === "1";
+let manualBans = new Set(), manualEnemy = new Set();  // championIds
+let liveBans = new Set(), liveEnemy = new Set();      // from the LCU bridge
+let enemyRole = new Map();   // enemy cid -> our ROLES key (inferred, editable)
+let liveDraft = { ts: 0, active: false };
+let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
+let dAdjCache = {};
+const MATCHUP_WEIGHT = 1;      // matchup deltas are already small; cap below
+const MATCHUP_CAP = 0.03;      // per-lane-opponent cap (±3pp)
+
+const effBans = () => draftMode ? new Set([...manualBans, ...liveBans]) : new Set();
+const effEnemy = () => draftMode ? new Set([...manualEnemy, ...liveEnemy]) : new Set();
+const draftUnavailable = cid => draftMode && (effBans().has(cid) || effEnemy().has(cid));
+
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
 // Share of ALL the player's games played in this role — their role comfort.
@@ -545,6 +600,59 @@ function metaWR(champId, role) {
   if (role && Object.keys(m.positions).length) return base - OFF_META_PRIOR_PENALTY;
   return base;
 }
+
+// Most-played position for a champion this patch — the default lane we assume
+// for an enemy pick (editable on its chip).
+function inferRole(cid) {
+  const m = META && META.champions[cid];
+  if (!m) return null;
+  let best = null, bestRate = 0;
+  for (const [pos, s] of Object.entries(m.positions))
+    if ((s.roleRate || 0) > bestRate) { bestRate = s.roleRate; best = pos; }
+  const back = { TOP: "TOP", JUNGLE: "JUNGLE", MID: "MIDDLE", ADC: "BOTTOM", SUPPORT: "UTILITY" };
+  return back[best] || null;
+}
+
+// Lane-matchup records for an enemy pick, fetched once per (champ, lane) and
+// KV-cached worker-side. Arrives async — scores re-render when it lands.
+function ensureCounters(cid, role) {
+  if (!role || !WORKER_URL) return;
+  const key = cid + "|" + OPGG_POS[role];
+  if (counterIdx[key]) return;
+  counterIdx[key] = {};  // placeholder so a slow response isn't refetched
+  fetch(`${WORKER_URL}/counters?champ=${cid}&pos=${OPGG_POS[role]}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(j => {
+      if (!j || !j.counters) return;
+      const map = {};
+      for (const c of j.counters) map[c.champion_id] = c;
+      counterIdx[key] = map;
+      draftChanged(false);
+    })
+    .catch(() => {});
+}
+
+// Matchup nudge for playing champ `cid` in `role` into the known enemy laner:
+// the complement of the enemy's WR vs us, shrunk by sample size and capped.
+// counters[x].win is the ENEMY champ's wins against x.
+function dAdj(cid, role) {
+  if (!draftMode) return 0;
+  const k = cid + "|" + role;
+  if (k in dAdjCache) return dAdjCache[k];
+  let adj = 0;
+  for (const ecid of effEnemy()) {
+    if (enemyRole.get(ecid) !== role) continue;
+    const rec = (counterIdx[ecid + "|" + OPGG_POS[role]] || {})[cid];
+    if (!rec || rec.play < 20) continue;
+    const edge = (0.5 - rec.win / rec.play) * (rec.play / (rec.play + 50)) * MATCHUP_WEIGHT;
+    adj += Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, edge));
+  }
+  return dAdjCache[k] = adj;
+}
+
+// indScore is draft-independent (and cached as such); slotScore adds the
+// draft-dependent matchup nudge on top. Use this everywhere a pick is scored.
+const slotScore = (riotId, champId, role) => indScore(riotId, champId, role) + dAdj(champId, role);
 
 function masteryBonus(riotId, champId) {
   const pts = (masteryIdx[riotId] || {})[champId] || 0;
@@ -634,7 +742,7 @@ function playerPairAdj(a, ra, b, rb) {
 // Full comp score: mean individual + all pairwise synergy adjustments.
 function compScore(assign) {  // assign: [{player, champ, role}]
   let ind = 0, syn = 0;
-  for (const a of assign) ind += indScore(a.player, a.champ, a.role);
+  for (const a of assign) ind += slotScore(a.player, a.champ, a.role);
   ind /= assign.length;
   for (let i = 0; i < assign.length; i++)
     for (let j = i + 1; j < assign.length; j++) {
@@ -664,16 +772,18 @@ function candidates(riotId, role, n = 3) {
   for (const m of p.mastery.slice(0, 12)) if (!pool.has(m.championId)) pool.set(m.championId, null);
   const scored = [...pool.keys()].map(cid => ({
     cid,
-    s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    s: slotScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
+    avail: !draftUnavailable(cid),
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
-  // The mastery floor and games range are hard filters — outside them a champ
-  // is simply not a pick for this player. Within them, prefer role-viable
-  // champs with a real game sample, degrading so the list stays useful.
-  const eligible = scored.filter(c => c.mastered && c.inRange);
+  // The mastery floor, games range, and draft availability are hard filters —
+  // outside them a champ is simply not a pick for this player. Within them,
+  // prefer role-viable champs with a real game sample, degrading so the list
+  // stays useful.
+  const eligible = scored.filter(c => c.mastered && c.inRange && c.avail);
   const tiers = [
     eligible.filter(c => c.viable && c.played),
     eligible.filter(c => c.viable),
@@ -742,7 +852,7 @@ function optimize(topN = 10) {
           const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
           champSynBound += pairBoostIdx[pk] || 0;
         }
-      const ind = cands.map((cs, i) => cs.map(cid => indScore(perm[i], cid, ROLES[i])));
+      const ind = cands.map((cs, i) => cs.map(cid => slotScore(perm[i], cid, ROLES[i])));
       // upper bound for this whole role assignment — skip it if it can't place
       let maxIndSum = 0;
       for (const arr of ind) maxIndSum += Math.max(...arr);
@@ -898,6 +1008,7 @@ function render() {
         </div>` : ""}
       </div>
       <div>
+        <div class="card" id="draftCard" hidden style="margin-bottom:18px"></div>
         <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
         </div>
@@ -921,7 +1032,8 @@ function render() {
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
         </div>
       </div>
-    </div>`;
+    </div>
+    <datalist id="champdl">${Object.values(D.champions).map(c => `<option value="${c.name}">`).join("")}</datalist>`;
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
@@ -979,8 +1091,124 @@ function render() {
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
+  renderDraft();
   renderSlots();
   renderScore();
+}
+
+// --- draft card ------------------------------------------------------------
+function renderDraft() {
+  const el = $("#draftCard");
+  if (!el) return;
+  el.hidden = !draftMode;
+  if (!draftMode) return;
+  const chip = (cid, kind) => {
+    const isLive = kind === "ban" ? liveBans.has(cid) : liveEnemy.has(cid);
+    const manual = kind === "ban" ? manualBans.has(cid) : manualEnemy.has(cid);
+    const roleSel = kind === "enemy" ? `<select data-erole="${cid}" title="their lane (guessed from the meta — fix if wrong)">
+        <option value="">lane?</option>
+        ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
+      </select>` : "";
+    return `<span class="dchip ${isLive ? "live" : ""}" title="${isLive ? "from live sync" : ""}">
+      <img src="${champIcon(cid)}" alt="">${champName(cid)}${roleSel}
+      ${manual && !isLive ? `<button data-remove="${kind}:${cid}" title="remove">✕</button>` : ""}
+    </span>`;
+  };
+  const bans = [...effBans()], enemy = [...effEnemy()];
+  el.innerHTML = `
+    <h2>Draft
+      <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
+    </h2>
+    <div class="draft-row">
+      <span class="dlabel">Bans</span>
+      ${bans.map(c => chip(c, "ban")).join("")}
+      <input class="dinput" id="banInput" list="champdl" placeholder="add ban…">
+    </div>
+    <div class="draft-row">
+      <span class="dlabel">Enemy</span>
+      ${enemy.map(c => chip(c, "enemy")).join("")}
+      <input class="dinput" id="enemyInput" list="champdl" placeholder="add enemy pick…">
+    </div>
+    ${enemy.length && PROFILES
+      ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs their laner:</div>` + profileHTML(enemy)
+      : `<div class="hint">Banned and enemy-picked champs drop out of candidates and the optimizer. Run <code>python3 lcu_bridge.py</code> next to the League client to sync this automatically.</div>`}
+  `;
+  updateLiveIndicator();
+  const resolve = v => {
+    const name = v.trim().toLowerCase();
+    const e = Object.entries(D.champions).find(([, c]) => c.name.toLowerCase() === name);
+    return e ? +e[0] : null;
+  };
+  const wire = (sel, add) => el.querySelector(sel).addEventListener("change", e => {
+    const cid = resolve(e.target.value);
+    if (cid == null) return;
+    add(cid);
+    e.target.value = "";
+    draftChanged();
+    el.querySelector(sel).focus();
+  });
+  wire("#banInput", cid => manualBans.add(cid));
+  wire("#enemyInput", cid => {
+    manualEnemy.add(cid);
+    if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
+    ensureCounters(cid, enemyRole.get(cid));
+  });
+  el.querySelectorAll("[data-remove]").forEach(b => b.addEventListener("click", () => {
+    const [kind, cid] = b.dataset.remove.split(":");
+    (kind === "ban" ? manualBans : manualEnemy).delete(+cid);
+    draftChanged();
+  }));
+  el.querySelectorAll("[data-erole]").forEach(s => s.addEventListener("change", e => {
+    const cid = +e.target.dataset.erole;
+    enemyRole.set(cid, e.target.value || null);
+    ensureCounters(cid, enemyRole.get(cid));
+    draftChanged();
+  }));
+}
+
+function updateLiveIndicator() {
+  const dot = $("#liveDot"), msg = $("#liveMsg");
+  if (!dot) return;
+  const age = Date.now() - liveDraft.ts;
+  if (!liveMode) { dot.className = "live-dot"; msg.textContent = "manual entry (no live worker)"; }
+  else if (liveDraft.active && age < 70e3) { dot.className = "live-dot on"; msg.textContent = "live from client"; }
+  else if (liveDraft.ts && age < 15 * 60e3) { dot.className = "live-dot"; msg.textContent = "no champ select — manual entry"; }
+  else { dot.className = "live-dot"; msg.textContent = "manual entry"; }
+}
+
+// Draft state changed: matchup + candidate caches are stale; re-rank any
+// results the user is currently looking at.
+function draftChanged(rerenderCard = true) {
+  dAdjCache = {};
+  candCache = {};
+  const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall };
+  rankedTabs.assigned = rankedTabs.overall = null;
+  if (rerenderCard) renderDraft();
+  renderSlots();
+  renderScore();
+  if (had[activeTab]) switchTab(activeTab);
+}
+
+let draftTimer = null;
+async function pollDraft() {
+  try {
+    const j = await fetch(WORKER_URL + "/draft").then(r => r.json());
+    if (j && j.ts && j.ts !== liveDraft.ts) {
+      liveDraft = j;
+      liveBans = new Set(j.active ? j.bans || [] : []);
+      liveEnemy = new Set(j.active ? j.enemy || [] : []);
+      for (const cid of liveEnemy) {
+        if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
+        ensureCounters(cid, enemyRole.get(cid));
+      }
+      draftChanged();
+    } else updateLiveIndicator();
+  } catch { /* worker hiccup — the indicator just goes stale */ }
+}
+function setDraftPolling(on) {
+  clearInterval(draftTimer);
+  draftTimer = null;
+  if (on && liveMode) { pollDraft(); draftTimer = setInterval(pollDraft, 3000); }
 }
 
 // Slotting a player is an implicit opt-in: re-check them in the squad list
@@ -1067,7 +1295,9 @@ function renderSlots() {
         stat += `<br><span class="dim">mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}</span>`;
         if (s.player === CS_MIN_PLAYER && e && e.secs)
           stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
-        stat += `<br><span class="scorechip">score ${pct(indScore(s.player, s.champ, role))}</span>`;
+        if (draftUnavailable(s.champ))
+          stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!" : "enemy took it!"}</span>`;
+        stat += `<br><span class="scorechip">score ${pct(slotScore(s.player, s.champ, role))}</span>`;
       }
     }
     return `<div class="slot ${s.champ ? "filled" : ""}">
@@ -1141,11 +1371,17 @@ function renderScore() {
 function renderProfile() {
   const el = $("#profile");
   if (!el || !PROFILES) return;
-  const champs = slots.filter(s => s.champ).map(s => PROFILES.champions[s.champ]).filter(Boolean);
-  if (champs.length < 5) {
-    el.innerHTML = `<div class="hint">Pick all five champions to see damage mix, frontline, and CC.</div>`;
-    return;
-  }
+  const cids = slots.filter(s => s.champ).map(s => s.champ);
+  el.innerHTML = cids.length < 5
+    ? `<div class="hint">Pick all five champions to see damage mix, frontline, and CC.</div>`
+    : profileHTML(cids);
+}
+
+// Damage mix / frontline / CC markup for any set of champions — the team
+// profile card and the draft card's enemy readout share this.
+function profileHTML(cids) {
+  const champs = cids.map(c => PROFILES && PROFILES.champions[c]).filter(Boolean);
+  if (!champs.length) return "";
   const share = k => champs.reduce((a, c) => a + c[k], 0) / champs.length;
   const phys = share("physShare"), magic = share("magicShare"), tru = Math.max(0, 1 - phys - magic);
   const dmgStatus = phys >= 0.7 ? { label: "Heavy AD", cls: "warn", tip: "easy to counter with armor" }
@@ -1165,7 +1401,7 @@ function renderProfile() {
     : { label: "Low", cls: "warn" };
 
   const pctLbl = x => Math.round(x * 100) + "%";
-  el.innerHTML = `
+  return `
     <div style="display:flex; align-items:center; gap:10px">
       <span class="plabel" style="flex:none; width:74px; font-size:12px; color:var(--ink-2); font-weight:600">Damage</span>
       <span style="flex:1"></span>
@@ -1425,6 +1661,19 @@ function initRoleToggle() {
   });
 }
 
+function initDraftToggle() {
+  const t = $("#draftToggle");
+  t.classList.toggle("active", draftMode);
+  setDraftPolling(draftMode);
+  t.addEventListener("click", () => {
+    draftMode = !draftMode;
+    localStorage.setItem("draftMode", draftMode ? "1" : "0");
+    t.classList.toggle("active", draftMode);
+    setDraftPolling(draftMode);
+    draftChanged();
+  });
+}
+
 function initFlexToggle() {
   const t = $("#flexToggle");
   // needs per-queue counters in the data — hide against a pre-split dataset
@@ -1457,6 +1706,7 @@ function initFlexToggle() {
   applyCurrent();
   initFlexToggle();
   initRoleToggle();
+  initDraftToggle();
   if (liveMode) { initRefreshButton(); doRefresh(true); }
 })();
 </script>

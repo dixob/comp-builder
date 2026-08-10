@@ -10,6 +10,10 @@
 //   GET  /data     -> {players, meta, profiles} exactly as the front-end expects
 //   POST /refresh  -> pull newest matches, merge, return {added, remaining, ...}
 //   POST /seed     -> replace KV state wholesale (x-admin-token: ADMIN_TOKEN)
+//   POST /draft    -> live champ-select state from lcu_bridge.py (admin token)
+//   GET  /draft    -> last posted champ-select state (front-end polls this)
+//   GET  /counters -> ?champ=<id>&pos=<TOP|JUNGLE|MID|ADC|SUPPORT> lane-matchup
+//                     records from OP.GG, KV-cached for a day
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
 //
 // Free-tier budget per /refresh: 6 match-id calls + <=MAX_NEW_MATCHES match
@@ -253,6 +257,34 @@ async function refresh(env) {
   });
 }
 
+// --- draft + counters -----------------------------------------------------
+
+const DRAFT_TTL = 2 * 60 * 60;      // stale drafts expire out of KV
+const COUNTERS_TTL = 24 * 60 * 60;  // matchup stats move slowly
+
+// Lane-matchup records for one champion+position from OP.GG's champion page
+// payload — only the counters list is kept, the rest (runes/items) is heavy.
+async function counters(env, url) {
+  const champ = Number(url.searchParams.get("champ"));
+  const pos = (url.searchParams.get("pos") || "").toUpperCase();
+  if (!champ || !["TOP", "JUNGLE", "MID", "ADC", "SUPPORT"].includes(pos))
+    return json({ error: "champ + pos=TOP|JUNGLE|MID|ADC|SUPPORT required" }, 400);
+  const state = await env.KV.get("state", "json");
+  const region = OPGG_REGION[(state && state.config.platform) || "na1"] || "na";
+  const key = `counters:${region}:${champ}:${pos}`;
+  const cached = await env.KV.get(key);
+  if (cached) return new Response(cached, {
+    headers: { "content-type": "application/json", ...CORS } });
+  const r = await fetch(
+    `https://lol-api-champion.op.gg/api/${region}/champions/ranked/${champ}/${pos}`,
+    { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" } });
+  if (!r.ok) return json({ error: `opgg ${r.status}` }, 502);
+  const raw = await r.json();
+  const body = JSON.stringify({ champ, pos, counters: (raw.data && raw.data.counters) || [] });
+  await env.KV.put(key, body, { expirationTtl: COUNTERS_TTL });
+  return new Response(body, { headers: { "content-type": "application/json", ...CORS } });
+}
+
 // --- cron: meta + champion names ------------------------------------------
 
 async function refreshMeta(env) {
@@ -311,6 +343,20 @@ export default {
           "content-type": "application/json", "cache-control": "no-store", ...CORS } });
       }
       if (url.pathname === "/refresh" && req.method === "POST") return refresh(env);
+      if (url.pathname === "/counters") return counters(env, url);
+      if (url.pathname === "/draft" && req.method === "GET") {
+        const d = await env.KV.get("draft");
+        return new Response(d || "{}", { headers: {
+          "content-type": "application/json", "cache-control": "no-store", ...CORS } });
+      }
+      if (url.pathname === "/draft" && req.method === "POST") {
+        if (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN)
+          return json({ error: "forbidden" }, 403);
+        const draft = await req.json();
+        draft.ts = Date.now();
+        await env.KV.put("draft", JSON.stringify(draft), { expirationTtl: DRAFT_TTL });
+        return json({ ok: true, ts: draft.ts });
+      }
       if (url.pathname === "/seed" && req.method === "POST") {
         if (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN)
           return json({ error: "forbidden" }, 403);
