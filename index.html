@@ -762,7 +762,9 @@ function roleViable(champEntry, champId, role) {
   if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= OWN_ROLE_VIABLE_GAMES) return true;
   const m = META && META.champions[champId];
   const pos = m && m.positions[OPGG_POS[role]];
-  return !!(pos && pos.games >= 100 && pos.roleRate >= 0.15);
+  // 10%: flex picks (Yasuo bot, mage supports) hover in the 10-15% band and
+  // are real drafts; below that a lane assignment is usually a fill/troll tag.
+  return !!(pos && pos.games >= 100 && pos.roleRate >= 0.10);
 }
 
 // Top champion candidates for a player in a role.
@@ -1325,9 +1327,23 @@ function renderSlots() {
         .slice(0, Math.max(0, 6 - Math.min(playedThere.length, 4)));  // keep the list short
       if (s.champ && !playedThere.includes(s.champ) && !metaOnly.includes(s.champ))
         metaOnly.unshift(s.champ);  // never drop the currently selected champion
+      // Everything else the player could reasonably lock: any champ of theirs
+      // that passes the mastery/games/draft filters but didn't make the
+      // auto-candidate list (off-meta for the lane, or below the score cut).
+      const shown = new Set([...playedThere, ...metaOnly]);
+      const poolAll = new Map();
+      for (const c of p.champions) poolAll.set(c.championId, c);
+      for (const m of p.mastery) if (!poolAll.has(m.championId)) poolAll.set(m.championId, null);
+      const offMeta = [...poolAll.keys()].filter(cid =>
+        !shown.has(cid)
+        && !draftUnavailable(cid)
+        && inMasteryRange((masteryIdx[s.player] || {})[cid] || 0)
+        && inGamesRange((poolAll.get(cid) || {}).games || 0))
+        .sort((a, b) => slotScore(s.player, b, role) - slotScore(s.player, a, role));
       champOpts =
         (playedThere.length ? `<optgroup label="Plays this role">${playedThere.map(opt).join("")}</optgroup>` : "") +
-        (metaOnly.length ? `<optgroup label="Meta-viable here">${metaOnly.map(opt).join("")}</optgroup>` : "");
+        (metaOnly.length ? `<optgroup label="Meta-viable here">${metaOnly.map(opt).join("")}</optgroup>` : "") +
+        (offMeta.length ? `<optgroup label="Off-meta / everything else">${offMeta.map(opt).join("")}</optgroup>` : "");
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
         const e = p.champions.find(c => c.championId === s.champ);
