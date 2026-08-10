@@ -494,9 +494,13 @@ let included = {};      // riotId -> bool
 let indCache = {};      // memoized indScore — larger rosters make the search combinatorial
 let candCache = {};     // memoized candidates
 const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot cards
-// Mastery slider: champs below this many mastery points are filtered from a
-// player's candidate list (with the usual graceful fallback). Default 30k.
-let masteryFloor = +(localStorage.getItem("masteryFloor") ?? 30000);
+// Mastery range: champs outside [masteryMin, masteryMax] mastery points are
+// filtered from a player's candidate list (with the usual graceful fallback).
+// Default 30k minimum; a max slider at MASTERY_OFF means no upper cap.
+const MASTERY_OFF = 200000;
+let masteryMin = +(localStorage.getItem("masteryFloor") ?? 30000);
+let masteryMax = +(localStorage.getItem("masteryMax") ?? MASTERY_OFF);
+const inMasteryRange = pts => pts >= masteryMin && (masteryMax >= MASTERY_OFF || pts <= masteryMax);
 // Games-played range: champs outside [minGames, maxGames] total ranked games
 // are filtered from candidate lists — too few games means the record is
 // noise, too many means the pick is predictable/bannable. A max slider at
@@ -662,7 +666,7 @@ function candidates(riotId, role, n = 3) {
     cid,
     s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
     viable: roleViable(pool.get(cid), cid, role),
-    mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= masteryFloor,
+    mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
@@ -823,6 +827,23 @@ const gamesLabel = () =>
   : !minGames ? `≤ ${maxGames}`
   : `${minGames}–${maxGames}`;
 
+const kFmt = v => (v / 1000) + "k";
+const masteryLabel = () =>
+  !masteryMin && masteryMax >= MASTERY_OFF ? "off"
+  : masteryMax >= MASTERY_OFF ? `≥ ${kFmt(masteryMin)}`
+  : !masteryMin ? `≤ ${kFmt(masteryMax)}`
+  : `${kFmt(masteryMin)}–${kFmt(masteryMax)}`;
+
+// One mastery control, two thumbs (min + max) on a shared track.
+const masteryControl = sfx => `<div class="mfloor">
+    <label for="mfSlider${sfx}">Mastery <b data-mfval>${masteryLabel()}</b></label>
+    <div class="dualrange" title="Champs outside this mastery range are filtered out of candidate lists (full width = off)">
+      <span class="drtrack"></span><span class="drfill" data-mffill style="left:${masteryMin / MASTERY_OFF * 100}%; width:${(Math.min(masteryMax, MASTERY_OFF) - masteryMin) / MASTERY_OFF * 100}%"></span>
+      <input type="range" id="mfSlider${sfx}" min="0" max="${MASTERY_OFF}" step="10000" value="${masteryMin}">
+      <input type="range" id="mxSlider${sfx}" min="0" max="${MASTERY_OFF}" step="10000" value="${Math.min(masteryMax, MASTERY_OFF)}">
+    </div>
+  </div>`;
+
 // One games-played control, two thumbs (min + max) on a shared track.
 const gamesControl = sfx => `<div class="mfloor">
     <label for="mgSlider${sfx}">Games played <b data-grval>${gamesLabel()}</b></label>
@@ -858,11 +879,7 @@ function render() {
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
-          <div class="mfloor">
-            <label for="mfSlider">Mastery floor <b data-mfval>${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
-            <input type="range" id="mfSlider" min="0" max="200000" step="10000" value="${masteryFloor}"
-              title="Champs below this mastery are filtered out of candidate lists">
-          </div>
+          ${masteryControl("")}
           ${gamesControl("")}
           <button class="btn full" id="opt">Optimize comp</button>
         </div>
@@ -891,11 +908,7 @@ function render() {
             title="Score and display using flex-queue games only">Flex only</button>
           <button class="btn toggle ${strictRole ? "active" : ""}" id="roleToggle2"
             title="Champion win rates count only games played in the assigned role">Role WR</button>
-          <span class="mfloor">
-            <label for="mfSlider2">Mastery floor <b data-mfval>${masteryFloor ? (masteryFloor / 1000) + "k" : "off"}</b></label>
-            <input type="range" id="mfSlider2" min="0" max="200000" step="10000" value="${masteryFloor}"
-              title="Champs below this mastery are filtered out of candidate lists">
-          </span>
+          ${masteryControl("2")}
           ${gamesControl("2")}
         </div>
         <div class="card" style="margin-top:18px">
@@ -923,16 +936,24 @@ function render() {
     renderSlots();
     renderScore();
   };
-  const setMasteryFloor = v => {
-    masteryFloor = v;
-    localStorage.setItem("masteryFloor", masteryFloor);
-    const label = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
-    document.querySelectorAll("[data-mfval]").forEach(el => el.textContent = label);
-    document.querySelectorAll("#mfSlider, #mfSlider2").forEach(el => { el.value = masteryFloor; });
+  const setMasteryRange = (lo, hi) => {
+    masteryMin = lo; masteryMax = hi;
+    localStorage.setItem("masteryFloor", masteryMin);
+    localStorage.setItem("masteryMax", masteryMax);
+    document.querySelectorAll("[data-mfval]").forEach(el => el.textContent = masteryLabel());
+    document.querySelectorAll("[data-mffill]").forEach(el => {
+      el.style.left = masteryMin / MASTERY_OFF * 100 + "%";
+      el.style.width = (Math.min(masteryMax, MASTERY_OFF) - masteryMin) / MASTERY_OFF * 100 + "%";
+    });
+    document.querySelectorAll("#mfSlider, #mfSlider2").forEach(el => { el.value = masteryMin; });
+    document.querySelectorAll("#mxSlider, #mxSlider2").forEach(el => { el.value = Math.min(masteryMax, MASTERY_OFF); });
     filtersChanged();
   };
-  $("#mfSlider").addEventListener("input", e => setMasteryFloor(+e.target.value));
-  $("#mfSlider2").addEventListener("input", e => setMasteryFloor(+e.target.value));
+  // dragging one bound past the other drags the other bound along
+  document.querySelectorAll("#mfSlider, #mfSlider2").forEach(el =>
+    el.addEventListener("input", e => setMasteryRange(+e.target.value, Math.max(masteryMax, +e.target.value))));
+  document.querySelectorAll("#mxSlider, #mxSlider2").forEach(el =>
+    el.addEventListener("input", e => setMasteryRange(Math.min(masteryMin, +e.target.value), +e.target.value)));
   const setGamesRange = (lo, hi) => {
     minGames = lo; maxGames = hi;
     localStorage.setItem("minGames", minGames);
@@ -985,10 +1006,10 @@ function playerNotes(p) {
   const deep = p.champions.filter(c => c.games >= MIN_CHAMP_GAMES).length;
   if (deep === 0) notes.push(`no champs with ${MIN_CHAMP_GAMES}+ games`);
   else if (deep < 5) notes.push(`only ${deep} champ${deep > 1 ? "s" : ""} with ${MIN_CHAMP_GAMES}+ games`);
-  if (masteryFloor) {
-    const m = Object.values(masteryIdx[p.riotId] || {}).filter(pts => pts >= masteryFloor).length;
-    if (m === 0) notes.push(`no champs ≥ ${masteryFloor / 1000}k mastery`);
-    else if (m < 5) notes.push(`only ${m} champ${m > 1 ? "s" : ""} ≥ ${masteryFloor / 1000}k mastery`);
+  if (masteryMin || masteryMax < MASTERY_OFF) {
+    const m = Object.values(masteryIdx[p.riotId] || {}).filter(inMasteryRange).length;
+    if (m === 0) notes.push(`no champs in mastery range`);
+    else if (m < 5) notes.push(`only ${m} champ${m > 1 ? "s" : ""} in mastery range`);
   }
   if (minGames || maxGames < MAX_GAMES_OFF) {
     const n = p.champions.filter(c => inGamesRange(c.games)).length;
