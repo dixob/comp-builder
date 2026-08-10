@@ -379,6 +379,9 @@
   @keyframes pulse { 50% { opacity: 0.45; } }
   .draft-state { font-size: 11px; font-weight: 400; color: var(--ink-muted); text-transform: none; letter-spacing: 0; }
   .slot .banned-note { color: var(--bad); font-weight: 700; font-size: 12px; }
+  /* Drafting declutters the page: roster and filters are pre-queue decisions,
+     so hide them and leave draft card + win rate + slots + comps. */
+  body.drafting #squadCard, body.drafting #profileCard, body.drafting .mirror-bar { display: none; }
 
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--ink-muted); font-size: 13.5px; line-height: 1.7; }
@@ -968,7 +971,7 @@ function render() {
   $("#app").innerHTML = `
     <div class="layout">
       <div>
-        <div class="card">
+        <div class="card" id="squadCard">
           <h2>Squad</h2>
           <div class="hint" style="margin-bottom:10px">Optimizer picks the best 5 of those checked.</div>
           ${D.players.map(p => {
@@ -1002,7 +1005,7 @@ function render() {
           <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
           <div class="breakdown" id="breakdown"></div>
         </div>
-        ${PROFILES ? `<div class="card">
+        ${PROFILES ? `<div class="card" id="profileCard">
           <h2>Team profile</h2>
           <div id="profile"></div>
         </div>` : ""}
@@ -1169,11 +1172,13 @@ function renderDraft() {
 function updateLiveIndicator() {
   const dot = $("#liveDot"), msg = $("#liveMsg");
   if (!dot) return;
-  const age = Date.now() - liveDraft.ts;
+  const wsUp = draftWS && draftWS.readyState === WebSocket.OPEN;
   if (!liveMode) { dot.className = "live-dot"; msg.textContent = "manual entry (no live worker)"; }
-  else if (liveDraft.active && age < 70e3) { dot.className = "live-dot on"; msg.textContent = "live from client"; }
-  else if (liveDraft.ts && age < 15 * 60e3) { dot.className = "live-dot"; msg.textContent = "no champ select — manual entry"; }
-  else { dot.className = "live-dot"; msg.textContent = "manual entry"; }
+  else if (wsUp && liveDraft.active) { dot.className = "live-dot on"; msg.textContent = "live from client"; }
+  else if (wsUp) { dot.className = "live-dot on"; msg.textContent = "connected — no champ select"; }
+  else if (liveDraft.active && Date.now() - liveDraft.ts < 70e3) {
+    dot.className = "live-dot"; msg.textContent = "live (reconnecting…)";
+  } else { dot.className = "live-dot"; msg.textContent = "reconnecting — manual entry works"; }
 }
 
 // Draft state changed: matchup + candidate caches are stale; re-rank any
@@ -1189,26 +1194,63 @@ function draftChanged(rerenderCard = true) {
   if (had[activeTab]) switchTab(activeTab);
 }
 
-let draftTimer = null;
-async function pollDraft() {
-  try {
-    const j = await fetch(WORKER_URL + "/draft").then(r => r.json());
-    if (j && j.ts && j.ts !== liveDraft.ts) {
-      liveDraft = j;
-      liveBans = new Set(j.active ? j.bans || [] : []);
-      liveEnemy = new Set(j.active ? j.enemy || [] : []);
-      for (const cid of liveEnemy) {
-        if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
-        ensureCounters(cid, enemyRole.get(cid));
-      }
-      draftChanged();
-    } else updateLiveIndicator();
-  } catch { /* worker hiccup — the indicator just goes stale */ }
+function applyLiveDraft(j) {
+  if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); return; }
+  liveDraft = j;
+  liveBans = new Set(j.active ? j.bans || [] : []);
+  liveEnemy = new Set(j.active ? j.enemy || [] : []);
+  for (const cid of liveEnemy) {
+    if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
+    ensureCounters(cid, enemyRole.get(cid));
+  }
+  draftChanged();
 }
-function setDraftPolling(on) {
-  clearInterval(draftTimer);
-  draftTimer = null;
-  if (on && liveMode) { pollDraft(); draftTimer = setInterval(pollDraft, 3000); }
+
+// Primary transport: a WebSocket to the DraftHub Durable Object — it sends
+// the current state on connect and pushes every bridge update instantly.
+// While the socket is down we fall back to polling so drafts stay usable.
+let draftWS = null, draftWSTimer = null, draftBackoff = 1000;
+let draftPingTimer = null, draftPollTimer = null;
+
+async function pollDraft() {
+  try { applyLiveDraft(await fetch(WORKER_URL + "/draft").then(r => r.json())); }
+  catch { /* worker hiccup — the indicator just goes stale */ }
+}
+
+function connectDraftWS() {
+  const ws = new WebSocket(WORKER_URL.replace(/^http/, "ws") + "/draft/ws");
+  draftWS = ws;
+  ws.onopen = () => {
+    if (draftWS !== ws) return;
+    draftBackoff = 1000;
+    clearInterval(draftPollTimer); draftPollTimer = null;
+    clearInterval(draftPingTimer);
+    draftPingTimer = setInterval(() => ws.send("ping"), 30000);
+    updateLiveIndicator();
+  };
+  ws.onmessage = e => {
+    if (e.data === "pong") return;
+    try { applyLiveDraft(JSON.parse(e.data)); } catch {}
+  };
+  ws.onclose = ws.onerror = () => {
+    if (draftWS !== ws) return;  // superseded by a newer socket
+    draftWS = null;
+    clearInterval(draftPingTimer);
+    updateLiveIndicator();
+    if (!draftMode) return;
+    if (!draftPollTimer) { pollDraft(); draftPollTimer = setInterval(pollDraft, 3000); }
+    clearTimeout(draftWSTimer);
+    draftWSTimer = setTimeout(connectDraftWS, draftBackoff);
+    draftBackoff = Math.min(draftBackoff * 2, 15000);
+  };
+}
+
+function setDraftLive(on) {
+  clearTimeout(draftWSTimer);
+  clearInterval(draftPollTimer); draftPollTimer = null;
+  clearInterval(draftPingTimer);
+  if (draftWS) { const ws = draftWS; draftWS = null; ws.close(); }
+  if (on && liveMode) connectDraftWS();
 }
 
 // Slotting a player is an implicit opt-in: re-check them in the squad list
@@ -1664,12 +1706,14 @@ function initRoleToggle() {
 function initDraftToggle() {
   const t = $("#draftToggle");
   t.classList.toggle("active", draftMode);
-  setDraftPolling(draftMode);
+  document.body.classList.toggle("drafting", draftMode);
+  setDraftLive(draftMode);
   t.addEventListener("click", () => {
     draftMode = !draftMode;
     localStorage.setItem("draftMode", draftMode ? "1" : "0");
     t.classList.toggle("active", draftMode);
-    setDraftPolling(draftMode);
+    document.body.classList.toggle("drafting", draftMode);
+    setDraftLive(draftMode);
     draftChanged();
   });
 }

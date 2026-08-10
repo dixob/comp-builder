@@ -15,6 +15,7 @@ third-party dependencies. The LCU API only listens on 127.0.0.1, so this must
 run locally — the web page cannot reach the client directly.
 """
 import base64
+import http.client
 import json
 import ssl
 import sys
@@ -31,8 +32,11 @@ LOCKFILE_CANDIDATES = [
     Path("C:/Riot Games/League of Legends/lockfile"),
 ]
 
-POLL_S = 2          # champ-select poll cadence
-SESSION_WAIT_S = 5  # cadence while waiting for a champ select to start
+# Localhost polling at 2 Hz on a kept-alive connection: the stdlib has no
+# WebSocket client, and half a second of detection latency matches what an
+# LCU event subscription would buy without adding a dependency.
+POLL_S = 0.5        # champ-select poll cadence
+SESSION_WAIT_S = 3  # cadence while waiting for a champ select to start
 
 # The client's TLS cert is self-signed — that's expected for the LCU API.
 SSL_CTX = ssl.create_default_context()
@@ -47,12 +51,37 @@ def find_lockfile():
     return None
 
 
-def lcu_get(port, password, path):
-    auth = base64.b64encode(f"riot:{password}".encode()).decode()
-    req = urllib.request.Request(f"https://127.0.0.1:{port}{path}",
-                                 headers={"Authorization": f"Basic {auth}"})
-    with urllib.request.urlopen(req, timeout=5, context=SSL_CTX) as r:
-        return json.load(r)
+class LCU:
+    """Tiny keep-alive client for the local League API."""
+
+    def __init__(self, port, password):
+        self.port = int(port)
+        self.auth = "Basic " + base64.b64encode(f"riot:{password}".encode()).decode()
+        self.conn = None
+
+    def get(self, path):
+        if self.conn is None:
+            self.conn = http.client.HTTPSConnection("127.0.0.1", self.port,
+                                                    timeout=5, context=SSL_CTX)
+        try:
+            self.conn.request("GET", path, headers={"Authorization": self.auth})
+            r = self.conn.getresponse()
+            body = r.read()
+        except (http.client.HTTPException, OSError):
+            self.close()  # stale keep-alive — caller retries on a fresh socket
+            raise
+        if r.status == 404:
+            raise LookupError(path)
+        if r.status >= 400:
+            raise RuntimeError(f"LCU {r.status} {path}")
+        return json.loads(body)
+
+    def close(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            finally:
+                self.conn = None
 
 
 def extract_draft(session):
@@ -104,13 +133,14 @@ def main():
         time.sleep(SESSION_WAIT_S)
         lock = find_lockfile()
     _, _, port, password, _ = lock.read_text().split(":")
+    lcu = LCU(port, password)
     print(f"Connected to League client on port {port}. Waiting for champ select...")
 
     last_sent = None
     in_session = False
     while True:
         try:
-            session = lcu_get(port, password, "/lol-champ-select/v1/session")
+            session = lcu.get("/lol-champ-select/v1/session")
             payload = extract_draft(session)
             if not in_session:
                 print("Champ select started.")
@@ -121,25 +151,26 @@ def main():
                 print(f"  synced: {len(payload['bans'])} bans, "
                       f"{len(payload['enemy'])} enemy picks, {len(payload['ours'])} ours")
             time.sleep(POLL_S)
-        except urllib.error.HTTPError as e:
-            if e.code == 404:  # not in champ select
-                if in_session:
-                    print("Champ select ended.")
-                    post_draft(worker_url, token, {"active": False})
-                    in_session = False
-                    last_sent = None
-                time.sleep(SESSION_WAIT_S)
-            else:
-                print(f"LCU error {e.code}, retrying...")
-                time.sleep(POLL_S)
+        except LookupError:  # 404 — not in champ select
+            if in_session:
+                print("Champ select ended.")
+                post_draft(worker_url, token, {"active": False})
+                in_session = False
+                last_sent = None
+            time.sleep(SESSION_WAIT_S)
+        except RuntimeError as e:
+            print(f"{e}, retrying...")
+            time.sleep(POLL_S)
         except (urllib.error.URLError, OSError):
             print("League client gone; waiting for it to come back...")
+            lcu.close()
             in_session = False
             last_sent = None
             time.sleep(SESSION_WAIT_S)
             lock = find_lockfile()
             if lock:
                 _, _, port, password, _ = lock.read_text().split(":")
+                lcu = LCU(port, password)
 
 
 if __name__ == "__main__":

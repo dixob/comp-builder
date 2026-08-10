@@ -11,3 +11,13 @@ crons = ["0 9 * * *"]
 [[kv_namespaces]]
 binding = "KV"
 id = "42195ef24a4943f8ae6b3a9773af63cf"
+
+# Live draft state: a single strongly-consistent instance that pushes updates
+# to connected WebSockets (SQLite-backed — required on the free plan).
+[[durable_objects.bindings]]
+name = "DRAFT"
+class_name = "DraftHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DraftHub"]

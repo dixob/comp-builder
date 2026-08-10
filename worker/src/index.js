@@ -11,7 +11,9 @@
 //   POST /refresh  -> pull newest matches, merge, return {added, remaining, ...}
 //   POST /seed     -> replace KV state wholesale (x-admin-token: ADMIN_TOKEN)
 //   POST /draft    -> live champ-select state from lcu_bridge.py (admin token)
-//   GET  /draft    -> last posted champ-select state (front-end polls this)
+//   GET  /draft    -> current champ-select state (strongly consistent)
+//   GET  /draft/ws -> WebSocket; sends current state on connect, then pushes
+//                     every update the moment the bridge posts it
 //   GET  /counters -> ?champ=<id>&pos=<TOP|JUNGLE|MID|ADC|SUPPORT> lane-matchup
 //                     records from OP.GG, KV-cached for a day
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
@@ -259,8 +261,52 @@ async function refresh(env) {
 
 // --- draft + counters -----------------------------------------------------
 
-const DRAFT_TTL = 2 * 60 * 60;      // stale drafts expire out of KV
 const COUNTERS_TTL = 24 * 60 * 60;  // matchup stats move slowly
+
+// The live draft lives in ONE Durable Object instance instead of KV: KV
+// replicates lazily (reads can lag writes by ~60s across colos), a DO is a
+// single authority every request routes to, so a posted ban is readable —
+// and pushed to connected WebSockets — immediately. Sockets use the
+// hibernation API so idle connections cost nothing.
+export class DraftHub {
+  constructor(ctx) {
+    this.ctx = ctx;
+  }
+
+  async fetch(req) {
+    const url = new URL(req.url);
+    if (url.pathname.endsWith("/ws")) {
+      if (req.headers.get("Upgrade") !== "websocket")
+        return json({ error: "websocket upgrade required" }, 426);
+      const pair = new WebSocketPair();
+      this.ctx.acceptWebSocket(pair[1]);
+      const draft = await this.ctx.storage.get("draft");
+      if (draft) pair[1].send(draft);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+    if (req.method === "POST") {  // auth already checked by the worker
+      const draft = await req.json();
+      draft.ts = Date.now();
+      const body = JSON.stringify(draft);
+      await this.ctx.storage.put("draft", body);
+      for (const ws of this.ctx.getWebSockets()) {
+        try { ws.send(body); } catch { /* peer gone; close event cleans up */ }
+      }
+      return json({ ok: true, ts: draft.ts, listeners: this.ctx.getWebSockets().length });
+    }
+    const draft = await this.ctx.storage.get("draft");
+    return new Response(draft || "{}", { headers: {
+      "content-type": "application/json", "cache-control": "no-store", ...CORS } });
+  }
+
+  // Hibernation hooks: we never expect client messages, but answering pings
+  // keeps intermediaries from killing quiet connections.
+  webSocketMessage(ws, msg) {
+    if (msg === "ping") ws.send("pong");
+  }
+  webSocketClose() {}
+  webSocketError() {}
+}
 
 // Lane-matchup records for one champion+position from OP.GG's champion page
 // payload — only the counters list is kept, the rest (runes/items) is heavy.
@@ -344,18 +390,12 @@ export default {
       }
       if (url.pathname === "/refresh" && req.method === "POST") return refresh(env);
       if (url.pathname === "/counters") return counters(env, url);
-      if (url.pathname === "/draft" && req.method === "GET") {
-        const d = await env.KV.get("draft");
-        return new Response(d || "{}", { headers: {
-          "content-type": "application/json", "cache-control": "no-store", ...CORS } });
-      }
-      if (url.pathname === "/draft" && req.method === "POST") {
-        if (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN)
+      if (url.pathname === "/draft" || url.pathname === "/draft/ws") {
+        if (req.method === "POST" &&
+            (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN))
           return json({ error: "forbidden" }, 403);
-        const draft = await req.json();
-        draft.ts = Date.now();
-        await env.KV.put("draft", JSON.stringify(draft), { expirationTtl: DRAFT_TTL });
-        return json({ ok: true, ts: draft.ts });
+        // one hub for the whole group — every client talks to the same instance
+        return env.DRAFT.get(env.DRAFT.idFromName("main")).fetch(req);
       }
       if (url.pathname === "/seed" && req.method === "POST") {
         if (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN)
