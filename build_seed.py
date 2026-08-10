@@ -36,11 +36,18 @@ PROFILE_FIELDS = {
 
 def main():
     cfg = json.loads((ROOT / "config.json").read_text())
+    # Only count matches newer than this — old games say little about current
+    # form, and champ game counts should reflect roughly the current season.
+    max_age_days = cfg.get("max_match_age_days", 365)
+    cutoff_ms = (time.time() - max_age_days * 86400) * 1000 if max_age_days else 0
     src = json.loads((ROOT / "data" / "players.json").read_text())
     meta_path = ROOT / "data" / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
 
-    rid_of = {p["puuid"]: p["riotId"] for p in src["players"]}
+    # PUUIDs are encrypted per API application — cached matches fetched under
+    # an older key carry old-style PUUIDs, so map every PUUID we've ever seen.
+    rid_of = {pu: p["riotId"] for p in src["players"]
+              for pu in p.get("puuidHistory", [p["puuid"]])}
     players = {
         p["riotId"]: {
             "profileIconId": p.get("profileIconId"),
@@ -56,8 +63,12 @@ def main():
     profile_sums = defaultdict(lambda: {k: 0 for k in PROFILE_FIELDS} | {"games": 0})
     processed = []
 
+    skipped_old = 0
     for f in sorted(glob.glob(str(ROOT / "data" / "matches" / "*.json"))):
         m = json.loads(Path(f).read_text())
+        if m["info"].get("gameStartTimestamp", 0) < cutoff_ms:
+            skipped_old += 1
+            continue
         processed.append(m["metadata"]["matchId"])
         parts = m["info"]["participants"]
 
@@ -125,7 +136,8 @@ def main():
         "config": {
             "platform": cfg["platform"],
             "queue": cfg.get("queue"),
-            "riotIds": [{"riotId": p["riotId"], "puuid": p["puuid"]}
+            "riotIds": [{"riotId": p["riotId"], "puuid": p["puuid"],
+                         "puuids": p.get("puuidHistory", [p["puuid"]])}
                         for p in src["players"]],
         },
         "players": players,
@@ -140,7 +152,8 @@ def main():
     }
     out = ROOT / "worker" / "seed_state.json"
     out.write_text(json.dumps(state))
-    print(f"Wrote {out.relative_to(ROOT)} — {len(processed)} matches, "
+    print(f"Wrote {out.relative_to(ROOT)} — {len(processed)} matches "
+          f"({skipped_old} older than {max_age_days}d skipped), "
           f"{len(players)} players, {len(champ_pairs)} champ pairs, "
           f"{out.stat().st_size // 1024} KB.")
 

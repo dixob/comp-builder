@@ -71,8 +71,10 @@ function bump(rec, won) { rec.games += 1; rec.wins += won ? 1 : 0; }
 
 function mergeMatch(state, m) {
   const parts = m.info.participants;
+  // PUUIDs are encrypted per API application — map every PUUID era we know
   const ridOf = {};
-  for (const a of state.config.riotIds) ridOf[a.puuid] = a.riotId;
+  for (const a of state.config.riotIds)
+    for (const pu of a.puuids || [a.puuid]) ridOf[pu] = a.riotId;
   let dur = m.info.gameDuration;
   if (dur > 20000) dur = Math.floor(dur / 1000); // pre-11.20 matches report ms
   const qid = m.info.queueId;

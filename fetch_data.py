@@ -115,12 +115,23 @@ def main():
     all_match_ids = set()
     puuid_to_player = {}
 
+    # PUUIDs are encrypted per API application, so cached matches fetched
+    # under an older key carry old-style PUUIDs — keep every PUUID we've ever
+    # resolved for a player so old matches still attribute to them.
+    prev_history = {}
+    players_path = DATA / "players.json"
+    if players_path.exists():
+        for p in json.loads(players_path.read_text())["players"]:
+            prev_history[p["riotId"]] = p.get("puuidHistory", [p["puuid"]])
+
     for riot_id in cfg["riot_ids"]:
         game_name, tag = riot_id.rsplit("#", 1)
         print(f"Resolving {riot_id}...")
         acct = riot.account(game_name, tag)
         puuid = acct["puuid"]
-        puuid_to_player[puuid] = riot_id
+        history = sorted(set(prev_history.get(riot_id, [])) | {puuid})
+        for pu in history:
+            puuid_to_player[pu] = riot_id
         summoner = riot.summoner(puuid)
         print(f"  mastery...")
         mastery = riot.mastery(puuid)
@@ -130,6 +141,7 @@ def main():
         players.append({
             "riotId": riot_id,
             "puuid": puuid,
+            "puuidHistory": history,
             "profileIconId": summoner.get("profileIconId"),
             "mastery": [
                 {"championId": m["championId"], "level": m["championLevel"], "points": m["championPoints"]}
@@ -169,7 +181,13 @@ def main():
     champ_pair_stats = defaultdict(lambda: {"games": 0, "wins": 0,
                                             "q": defaultdict(lambda: {"games": 0, "wins": 0})})
 
+    # Only count matches newer than this — old games say little about current
+    # form (the raw match stays cached either way).
+    max_age_days = cfg.get("max_match_age_days", 365)
+    cutoff_ms = (time.time() - max_age_days * 86400) * 1000 if max_age_days else 0
     for m in matches:
+        if m["info"].get("gameStartTimestamp", 0) < cutoff_ms:
+            continue
         parts = m["info"]["participants"]
         dur = m["info"]["gameDuration"]
         if dur > 20000:  # pre-11.20 matches report milliseconds

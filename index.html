@@ -152,6 +152,29 @@
   .mfloor label { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-2); margin-bottom: 4px; }
   .mfloor label b { color: var(--gold); }
   .mfloor input[type="range"] { width: 100%; accent-color: var(--gold); cursor: pointer; }
+  /* two-thumb range: min and max inputs stacked on one track, thumbs styled
+     to match accent-color sliders; only the thumbs take pointer events */
+  .dualrange { position: relative; height: 18px; }
+  .dualrange input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+    background: none; pointer-events: none;
+  }
+  .dualrange input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; pointer-events: auto;
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--gold); cursor: pointer; border: 2px solid var(--page);
+  }
+  .dualrange input[type="range"]::-moz-range-thumb {
+    pointer-events: auto; width: 13px; height: 13px; border-radius: 50%;
+    background: var(--gold); cursor: pointer; border: 2px solid var(--page);
+  }
+  .drtrack, .drfill {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    height: 4px; border-radius: 2px; pointer-events: none;
+  }
+  .drtrack { left: 0; right: 0; background: var(--surface-2); border: 1px solid var(--line-soft); }
+  .drfill { background: linear-gradient(90deg, #b98a25, var(--gold)); }
 
   /* ---- win-rate hero ---- */
   .hero-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -190,7 +213,8 @@
   /* ---- draft board ---- */
   .board-head { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
   .mirror-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
-  .mirror-bar .mfloor { margin-top: 0; flex: 1 1 170px; max-width: 280px; margin-left: auto; }
+  .mirror-bar .mfloor { margin-top: 0; flex: 1 1 130px; max-width: 220px; }
+  .mirror-bar .toggle + .mfloor { margin-left: auto; }  /* first slider after the toggles pushes the group right */
   .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
   @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }
   .slot {
@@ -473,6 +497,14 @@ const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot 
 // Mastery slider: champs below this many mastery points are filtered from a
 // player's candidate list (with the usual graceful fallback). Default 30k.
 let masteryFloor = +(localStorage.getItem("masteryFloor") ?? 30000);
+// Games-played range: champs outside [minGames, maxGames] total ranked games
+// are filtered from candidate lists — too few games means the record is
+// noise, too many means the pick is predictable/bannable. A max slider at
+// MAX_GAMES_OFF means no upper cap.
+const MAX_GAMES_OFF = 120;
+let minGames = +(localStorage.getItem("minGames") ?? 0);
+let maxGames = +(localStorage.getItem("maxGames") ?? MAX_GAMES_OFF);
+const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
 // Strict role WRs: champion win rates count only games in the assigned role
 // (off-role games contribute nothing instead of OFF_ROLE_GAME_WEIGHT).
 let strictRole = localStorage.getItem("strictRole") === "1";
@@ -631,16 +663,17 @@ function candidates(riotId, role, n = 3) {
     s: indScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
     viable: roleViable(pool.get(cid), cid, role),
     mastered: ((masteryIdx[riotId] || {})[cid] || 0) >= masteryFloor,
+    inRange: inGamesRange((pool.get(cid) || {}).games || 0),
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
-  // The mastery floor is a hard filter — below it a champ is simply not a
-  // pick for this player. Within the floor, prefer role-viable champs with a
-  // real game sample, degrading so the list stays useful.
-  const mastered = scored.filter(c => c.mastered);
+  // The mastery floor and games range are hard filters — outside them a champ
+  // is simply not a pick for this player. Within them, prefer role-viable
+  // champs with a real game sample, degrading so the list stays useful.
+  const eligible = scored.filter(c => c.mastered && c.inRange);
   const tiers = [
-    mastered.filter(c => c.viable && c.played),
-    mastered.filter(c => c.viable),
-    mastered,
+    eligible.filter(c => c.viable && c.played),
+    eligible.filter(c => c.viable),
+    eligible,
   ];
   const list = (tiers.find(t => t.length) || []).sort((a, b) => b.s - a.s);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
@@ -784,6 +817,22 @@ function verdict(total) {
   return { label: "Uphill battle", cls: "bad" };
 }
 
+const gamesLabel = () =>
+  !minGames && maxGames >= MAX_GAMES_OFF ? "off"
+  : maxGames >= MAX_GAMES_OFF ? `≥ ${minGames}`
+  : !minGames ? `≤ ${maxGames}`
+  : `${minGames}–${maxGames}`;
+
+// One games-played control, two thumbs (min + max) on a shared track.
+const gamesControl = sfx => `<div class="mfloor">
+    <label for="mgSlider${sfx}">Games played <b data-grval>${gamesLabel()}</b></label>
+    <div class="dualrange" title="Champs outside this many total ranked games are filtered out of candidate lists (full width = off)">
+      <span class="drtrack"></span><span class="drfill" data-grfill style="left:${minGames / MAX_GAMES_OFF * 100}%; width:${(Math.min(maxGames, MAX_GAMES_OFF) - minGames) / MAX_GAMES_OFF * 100}%"></span>
+      <input type="range" id="mgSlider${sfx}" min="0" max="${MAX_GAMES_OFF}" step="1" value="${minGames}">
+      <input type="range" id="xgSlider${sfx}" min="0" max="${MAX_GAMES_OFF}" step="1" value="${Math.min(maxGames, MAX_GAMES_OFF)}">
+    </div>
+  </div>`;
+
 function render() {
   $("#app").innerHTML = `
     <div class="layout">
@@ -814,6 +863,7 @@ function render() {
             <input type="range" id="mfSlider" min="0" max="200000" step="10000" value="${masteryFloor}"
               title="Champs below this mastery are filtered out of candidate lists">
           </div>
+          ${gamesControl("")}
           <button class="btn full" id="opt">Optimize comp</button>
         </div>
         <div class="card">
@@ -846,6 +896,7 @@ function render() {
             <input type="range" id="mfSlider2" min="0" max="200000" step="10000" value="${masteryFloor}"
               title="Champs below this mastery are filtered out of candidate lists">
           </span>
+          ${gamesControl("2")}
         </div>
         <div class="card" style="margin-top:18px">
           <h2 style="margin-bottom:14px">Top compositions
@@ -864,21 +915,42 @@ function render() {
       rankedTabs.overall = null;  // player pool changed — stale
       if (activeTab === "overall") switchTab("overall");
     }));
-  // the squad card's slider and its board-head mirror drive the same state
+  // the squad card's sliders and their board-head mirrors drive the same state
+  const filtersChanged = () => {
+    candCache = {};  // candidate lists depend on the filters
+    rankedTabs.assigned = rankedTabs.overall = null;
+    updateSquadNotes();
+    renderSlots();
+    renderScore();
+  };
   const setMasteryFloor = v => {
     masteryFloor = v;
     localStorage.setItem("masteryFloor", masteryFloor);
     const label = masteryFloor ? (masteryFloor / 1000) + "k" : "off";
     document.querySelectorAll("[data-mfval]").forEach(el => el.textContent = label);
     document.querySelectorAll("#mfSlider, #mfSlider2").forEach(el => { el.value = masteryFloor; });
-    candCache = {};  // candidate lists depend on the floor
-    rankedTabs.assigned = rankedTabs.overall = null;
-    updateSquadNotes();
-    renderSlots();
-    renderScore();
+    filtersChanged();
   };
   $("#mfSlider").addEventListener("input", e => setMasteryFloor(+e.target.value));
   $("#mfSlider2").addEventListener("input", e => setMasteryFloor(+e.target.value));
+  const setGamesRange = (lo, hi) => {
+    minGames = lo; maxGames = hi;
+    localStorage.setItem("minGames", minGames);
+    localStorage.setItem("maxGames", maxGames);
+    document.querySelectorAll("[data-grval]").forEach(el => el.textContent = gamesLabel());
+    document.querySelectorAll("[data-grfill]").forEach(el => {
+      el.style.left = minGames / MAX_GAMES_OFF * 100 + "%";
+      el.style.width = (Math.min(maxGames, MAX_GAMES_OFF) - minGames) / MAX_GAMES_OFF * 100 + "%";
+    });
+    document.querySelectorAll("#mgSlider, #mgSlider2").forEach(el => { el.value = minGames; });
+    document.querySelectorAll("#xgSlider, #xgSlider2").forEach(el => { el.value = Math.min(maxGames, MAX_GAMES_OFF); });
+    filtersChanged();
+  };
+  // dragging one bound past the other drags the other bound along
+  document.querySelectorAll("#mgSlider, #mgSlider2").forEach(el =>
+    el.addEventListener("input", e => setGamesRange(+e.target.value, Math.max(maxGames, +e.target.value))));
+  document.querySelectorAll("#xgSlider, #xgSlider2").forEach(el =>
+    el.addEventListener("input", e => setGamesRange(Math.min(minGames, +e.target.value), +e.target.value)));
   // mirrors delegate to the canonical header toggles
   $("#flexToggle2").addEventListener("click", () => $("#flexToggle").click());
   $("#roleToggle2").addEventListener("click", () => $("#roleToggle").click());
@@ -918,6 +990,11 @@ function playerNotes(p) {
     if (m === 0) notes.push(`no champs ≥ ${masteryFloor / 1000}k mastery`);
     else if (m < 5) notes.push(`only ${m} champ${m > 1 ? "s" : ""} ≥ ${masteryFloor / 1000}k mastery`);
   }
+  if (minGames || maxGames < MAX_GAMES_OFF) {
+    const n = p.champions.filter(c => inGamesRange(c.games)).length;
+    if (n === 0) notes.push(`no champs in games range`);
+    else if (n < 5) notes.push(`only ${n} champ${n > 1 ? "s" : ""} in games range`);
+  }
   return notes.map(n => `<span class="lowdata">${n}</span>`).join("");
 }
 
@@ -946,7 +1023,7 @@ function renderSlots() {
       const p = D.players.find(p => p.riotId === s.player);
       const cands = candidates(s.player, role, 15);
       if (!cands.length && !s.champ)
-        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery floor</div>`;
+        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery/games filters</div>`;
       if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
       const opt = cid => `<option value="${cid}" ${s.champ === cid ? "selected" : ""}>${champName(cid)}</option>`;
       const playedThere = cands.filter(cid => {
