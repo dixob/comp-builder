@@ -1314,7 +1314,9 @@ function renderSlots() {
       const share = playerRoleShare(s.player, role);
       comfortLine = `<div class="cstat dim" style="margin-bottom:6px">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
       const p = D.players.find(p => p.riotId === s.player);
-      const cands = candidates(s.player, role, 15);
+      // copy — candidates() returns its cached array, and the unshift below
+      // must not leak the hand-picked champ into the cache
+      const cands = [...candidates(s.player, role, 15)];
       if (!cands.length && !s.champ)
         comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery/games filters</div>`;
       if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
@@ -1334,15 +1336,19 @@ function renderSlots() {
       const poolAll = new Map();
       for (const c of p.champions) poolAll.set(c.championId, c);
       for (const m of p.mastery) if (!poolAll.has(m.championId)) poolAll.set(m.championId, null);
-      const offMeta = [...poolAll.keys()].filter(cid =>
+      const byScore = (a, b) => slotScore(s.player, b, role) - slotScore(s.player, a, role);
+      const extras = [...poolAll.keys()].filter(cid =>
         !shown.has(cid)
         && !draftUnavailable(cid)
         && inMasteryRange((masteryIdx[s.player] || {})[cid] || 0)
-        && inGamesRange((poolAll.get(cid) || {}).games || 0))
-        .sort((a, b) => slotScore(s.player, b, role) - slotScore(s.player, a, role));
+        && inGamesRange((poolAll.get(cid) || {}).games || 0));
+      // champs cut from the candidate list by its display cap are still
+      // meta-viable — group them honestly instead of calling them off-meta
+      const cutViable = extras.filter(cid => roleViable(poolAll.get(cid), cid, role)).sort(byScore);
+      const offMeta = extras.filter(cid => !roleViable(poolAll.get(cid), cid, role)).sort(byScore);
       champOpts =
         (playedThere.length ? `<optgroup label="Plays this role">${playedThere.map(opt).join("")}</optgroup>` : "") +
-        (metaOnly.length ? `<optgroup label="Meta-viable here">${metaOnly.map(opt).join("")}</optgroup>` : "") +
+        (metaOnly.length + cutViable.length ? `<optgroup label="Meta-viable here">${[...metaOnly, ...cutViable].map(opt).join("")}</optgroup>` : "") +
         (offMeta.length ? `<optgroup label="Off-meta / everything else">${offMeta.map(opt).join("")}</optgroup>` : "");
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
