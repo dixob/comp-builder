@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Comp Builder</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z' fill='none' stroke='%23e3b13f' stroke-width='1.6'/%3E%3Ccircle cx='12' cy='12.4' r='3.2' fill='%23e3b13f'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -25,7 +26,7 @@
     --positive: #57c78a;
     --negative: #ff6b6b;
     --warning: #eac54f;
-    --outline: #5f6878;
+    --outline: #6c7483;
     --outline-variant: #343a46;
     --focus: #7cc4ff;
     --accent-dim: rgba(90, 162, 255, 0.16);
@@ -51,20 +52,20 @@
     --layer-3: #ffffff;
     --text-primary: #30343c;
     --text-secondary: #5b6270;
-    --text-muted: #6d7585;
-    --accent: #2f6fd6;
+    --text-muted: #656d7c;
+    --accent: #2d69cb;
     --on-accent: #ffffff;
-    --enemy: #c65a2e;
+    --enemy: #b05029;
     --positive: #1d7a4a;
-    --negative: #c93a40;
+    --negative: #c5393f;
     --warning: #8a6d1c;
-    --outline: #8d95a3;
+    --outline: #828996;
     --outline-variant: #d8dce3;
-    --focus: #2f6fd6;
-    --accent-dim: rgba(47, 111, 214, 0.12);
+    --focus: #2d69cb;
+    --accent-dim: rgba(45, 105, 203, 0.12);
     --positive-dim: rgba(29, 122, 74, 0.14);
-    --negative-dim: rgba(201, 58, 64, 0.12);
-    --enemy-dim: rgba(198, 90, 46, 0.12);
+    --negative-dim: rgba(197, 57, 63, 0.12);
+    --enemy-dim: rgba(176, 80, 41, 0.12);
     --warning-dim: rgba(138, 109, 28, 0.12);
     --hover-layer: rgba(48, 52, 60, 0.06);
     --elev-sm: 0 1px 2px rgba(16, 24, 40, 0.12);
@@ -80,20 +81,20 @@
       --layer-3: #ffffff;
       --text-primary: #30343c;
       --text-secondary: #5b6270;
-      --text-muted: #6d7585;
-      --accent: #2f6fd6;
+      --text-muted: #656d7c;
+      --accent: #2d69cb;
       --on-accent: #ffffff;
-      --enemy: #c65a2e;
+      --enemy: #b05029;
       --positive: #1d7a4a;
-      --negative: #c93a40;
+      --negative: #c5393f;
       --warning: #8a6d1c;
-      --outline: #8d95a3;
+      --outline: #828996;
       --outline-variant: #d8dce3;
-      --focus: #2f6fd6;
-      --accent-dim: rgba(47, 111, 214, 0.12);
+      --focus: #2d69cb;
+      --accent-dim: rgba(45, 105, 203, 0.12);
       --positive-dim: rgba(29, 122, 74, 0.14);
-      --negative-dim: rgba(201, 58, 64, 0.12);
-      --enemy-dim: rgba(198, 90, 46, 0.12);
+      --negative-dim: rgba(197, 57, 63, 0.12);
+      --enemy-dim: rgba(176, 80, 41, 0.12);
       --warning-dim: rgba(138, 109, 28, 0.12);
       --hover-layer: rgba(48, 52, 60, 0.06);
       --elev-sm: 0 1px 2px rgba(16, 24, 40, 0.12);
@@ -590,7 +591,7 @@
   <button id="draftToggle" class="btn toggle" title="Draft assist: bans and enemy picks filter the board (auto-synced when lcu_bridge.py runs)">Draft</button>
     <button id="themeToggle" class="btn toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">◐</button>
   </header>
-  <div id="app"></div>
+  <main id="app"></main>
 </div>
 
 <script>
@@ -1113,8 +1114,8 @@ const masteryControl = sfx => `<div class="mfloor">
     <label for="mfSlider${sfx}">Mastery <b data-mfval>${masteryLabel()}</b></label>
     <div class="dualrange" title="Champs outside this mastery range are filtered out of candidate lists (full width = off)">
       <span class="drtrack"></span><span class="drfill" data-mffill style="left:${masteryMin / MASTERY_OFF * 100}%; width:${(Math.min(masteryMax, MASTERY_OFF) - masteryMin) / MASTERY_OFF * 100}%"></span>
-      <input type="range" id="mfSlider${sfx}" min="0" max="${MASTERY_OFF}" step="10000" value="${masteryMin}">
-      <input type="range" id="mxSlider${sfx}" min="0" max="${MASTERY_OFF}" step="10000" value="${Math.min(masteryMax, MASTERY_OFF)}">
+      <input type="range" id="mfSlider${sfx}" aria-label="Mastery minimum" min="0" max="${MASTERY_OFF}" step="10000" value="${masteryMin}">
+      <input type="range" id="mxSlider${sfx}" aria-label="Mastery maximum" min="0" max="${MASTERY_OFF}" step="10000" value="${Math.min(masteryMax, MASTERY_OFF)}">
     </div>
   </div>`;
 
@@ -1123,8 +1124,8 @@ const gamesControl = sfx => `<div class="mfloor">
     <label for="mgSlider${sfx}">Games played <b data-grval>${gamesLabel()}</b></label>
     <div class="dualrange" title="Champs outside this many total ranked games are filtered out of candidate lists (full width = off)">
       <span class="drtrack"></span><span class="drfill" data-grfill style="left:${minGames / MAX_GAMES_OFF * 100}%; width:${(Math.min(maxGames, MAX_GAMES_OFF) - minGames) / MAX_GAMES_OFF * 100}%"></span>
-      <input type="range" id="mgSlider${sfx}" min="0" max="${MAX_GAMES_OFF}" step="1" value="${minGames}">
-      <input type="range" id="xgSlider${sfx}" min="0" max="${MAX_GAMES_OFF}" step="1" value="${Math.min(maxGames, MAX_GAMES_OFF)}">
+      <input type="range" id="mgSlider${sfx}" aria-label="Games played minimum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${minGames}">
+      <input type="range" id="xgSlider${sfx}" aria-label="Games played maximum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${Math.min(maxGames, MAX_GAMES_OFF)}">
     </div>
   </div>`;
 
@@ -1278,7 +1279,7 @@ function renderDraft() {
       const auto = guess.length
         ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
         : "lane?";
-      roleSel = `<select data-erole="${cid}" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
+      roleSel = `<select data-erole="${cid}" aria-label="${champName(cid)} lane" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
         <option value="">${auto}</option>
         ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
       </select>`;
@@ -1298,12 +1299,12 @@ function renderDraft() {
     <div class="draft-row">
       <span class="dlabel">Bans</span>
       ${bans.map(c => chip(c, "ban")).join("")}
-      <input class="dinput" id="banInput" list="champdl" placeholder="add ban…">
+      <input class="dinput" id="banInput" list="champdl" aria-label="Add ban" placeholder="add ban…">
     </div>
     <div class="draft-row">
       <span class="dlabel">Enemy</span>
       ${enemy.map(c => chip(c, "enemy")).join("")}
-      <input class="dinput" id="enemyInput" list="champdl" placeholder="add enemy pick…">
+      <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
     ${liveOurs.length ? `<div class="draft-row">
       <span class="dlabel">Ours</span>
@@ -1647,9 +1648,9 @@ function renderSlots() {
     }
     return `<div class="slot ${s.champ ? "filled" : ""}">
       <h3>${ROLE_ICON[role]}${ROLE_LABEL[role]}</h3>
-      <select data-slot="${i}" data-kind="player"><option value="">— player —</option>${playerOpts}</select>
+      <select data-slot="${i}" data-kind="player" aria-label="${ROLE_LABEL[role]} player"><option value="">— player —</option>${playerOpts}</select>
       ${comfortLine}
-      <select data-slot="${i}" data-kind="champ" ${s.player ? "" : "disabled"}><option value="">— champion —</option>${champOpts}</select>
+      <select data-slot="${i}" data-kind="champ" aria-label="${ROLE_LABEL[role]} champion" ${s.player ? "" : "disabled"}><option value="">— champion —</option>${champOpts}</select>
       ${s.champ
         ? `<div class="portrait-wrap"><img class="portrait" src="${champIcon(s.champ)}" alt="${champName(s.champ)}" title="${champName(s.champ)}"></div>`
         : `<div class="portrait-empty">?</div>`}
