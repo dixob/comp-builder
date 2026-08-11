@@ -340,6 +340,8 @@
 
   /* ---- top comps ---- */
   .tabs { display: inline-flex; gap: 4px; background: var(--layer-2); border-radius: 999px; padding: 3px; }
+  /* an author display value outranks the UA [hidden] rule — restore it */
+  .tabs[hidden] { display: none; }
   .tabs button {
     font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
     background: none; border: none; color: var(--text-secondary);
@@ -464,6 +466,14 @@
   /* the full optimizer lives in the squad card — surface it on the board
      while drafting so hiding that card doesn't orphan the main action */
   body:not(.drafting) #optFull { display: none; }
+  /* Roles locked: the full search would reshuffle who plays where, which is
+     exactly what the lock forbids — hide it and promote the champs-only
+     button to primary so the board still has one obvious main action. */
+  body.roles-locked #optFull { display: none; }
+  body.roles-locked #optChamps {
+    color: var(--on-accent); background: var(--accent); border-color: transparent;
+  }
+  body.roles-locked #optChamps:hover { background: var(--accent); filter: brightness(1.08); }
   #draftClear, #roleLockBtn {
     margin-left: var(--sp-2); padding: 3px 10px; height: auto; font-size: 11px; font-weight: 500;
     letter-spacing: 0; text-transform: none; flex: none;
@@ -783,9 +793,12 @@ let strictRole = localStorage.getItem("strictRole") === "1";
 // with OP.GG matchup records.
 let draftMode = localStorage.getItem("draftMode") === "1";
 // "We're playing these roles this game": auto re-optimization on bans/enemy
-// picks re-picks champions only and never reshuffles player→role. Manual
-// actions (pin drags, the full-search button) still override.
+// picks re-picks champions only and never reshuffles player→role. Dragging a
+// pin still reassigns roles — that's the deliberate manual override.
 let lockRoles = localStorage.getItem("lockRoles") === "1";
+// The lock only exists inside draft mode (its toggle lives in the rift card),
+// so a stale localStorage "1" can't affect the normal builder.
+const rolesLocked = () => draftMode && lockRoles;
 let manualBans = new Set(), manualEnemy = new Set();  // championIds
 let liveBans = new Set(), liveEnemy = new Set();      // from the LCU bridge
 let enemyRole = new Map();   // enemy cid -> our ROLES key (inferred, editable)
@@ -1359,8 +1372,8 @@ function render() {
           ${gamesControl("2")}
         </div>
         <div class="card" style="margin-top:18px">
-          <h2 style="margin-bottom:14px">Top compositions
-            <span class="tabs h2tabs">
+          <h2 style="margin-bottom:14px"><span id="rankedHead">Top compositions</span>
+            <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
             </span>
@@ -1442,6 +1455,7 @@ function renderDraft() {
   const el = $("#riftCard");
   if (!el) return;
   el.hidden = !draftMode;
+  document.body.classList.toggle("roles-locked", rolesLocked());
   if (!draftMode) return;
   const bans = [...effBans()], enemy = [...effEnemy()];
   const banChip = cid => {
@@ -1456,7 +1470,7 @@ function renderDraft() {
     <h2>Summoner's Rift
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
       <button class="btn toggle ${lockRoles ? "active" : ""}" id="roleLockBtn"
-        title="We're playing these roles: bans and enemy picks only re-pick champions — the optimizer never reshuffles who plays where. Pin drags and the full Optimize comp button still override.">Lock roles</button>
+        title="We're playing these roles: bans and enemy picks only re-pick champions — nothing reshuffles who plays where. Drag a pin to reassign a role by hand.">Lock roles</button>
       ${manualBans.size || manualEnemy.size
         ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans and enemy picks">Clear</button>` : ""}
     </h2>
@@ -1785,12 +1799,14 @@ function autoOptimize(deadNames) {
   // Roles locked: search champions only, players stay in their lanes. An
   // incomplete board falls through to autoReplaceDead, which is also
   // role-preserving.
-  const res = lockRoles ? (optimizeChamps(10, fixed) || []) : optimize(10, fixed);
+  const res = rolesLocked() ? (optimizeChamps(10, fixed) || []) : optimize(10, fixed);
   if (!res.length) return false;
   const before = slots.map(s => s.player + "|" + s.champ).join();
   const hadChamps = slots.some(s => s.champ);
   res[0].assign.forEach((a, i) => { slots[i] = { player: a.player, champ: a.champ }; });
-  rankedTabs.overall = res;
+  // locked results are champs-for-these-roles — they belong in that tab, not
+  // under "Best overall", which promises a role-agnostic search
+  rankedTabs[rolesLocked() ? "assigned" : "overall"] = res;
   if (hadChamps && slots.map(s => s.player + "|" + s.champ).join() !== before)
     autoSwapNote = (deadNames.length
       ? `re-optimized — ${deadNames.join(", ")} no longer available`
@@ -1812,7 +1828,9 @@ function draftChanged(rerenderCard = true) {
   const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall };
   rankedTabs.assigned = rankedTabs.overall = null;
   if (autoOptimize(dead)) {
-    had.overall = true;  // fresh results are worth showing
+    // fresh results are worth showing — in whichever tab they landed
+    if (rolesLocked()) { had.assigned = true; activeTab = "assigned"; }
+    else had.overall = true;
   } else {
     const swaps = autoReplaceDead();
     if (swaps) autoSwapNote = `auto-swapped ${swaps.join(", ")} — pick was banned, taken, or hard-countered`;
@@ -2215,6 +2233,9 @@ const rankedTabs = { assigned: null, overall: null };
 let activeTab = "overall";
 
 function switchTab(tab) {
+  // A role-agnostic search contradicts a locked board, so while the lock is on
+  // there is only one list — asking for "overall" gets the champs-only one.
+  if (rolesLocked()) tab = "assigned";
   activeTab = tab;
   if (!rankedTabs[tab]) {
     const res = tab === "overall" ? optimize(10) : optimizeChamps(10);
@@ -2224,6 +2245,12 @@ function switchTab(tab) {
 }
 
 function renderTabs() {
+  const locked = rolesLocked();
+  // Locked leaves exactly one list, so the whole switcher goes — a lone tab
+  // chip that can't be switched away from is a dead control. The heading
+  // carries the meaning instead.
+  $("#rankedTabs").hidden = locked;
+  $("#rankedHead").textContent = locked ? "Top comps for these roles" : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   const results = rankedTabs[activeTab];
@@ -2265,6 +2292,9 @@ function renderRanked(results) {
 }
 
 function runOptimize() {
+  // both entry points to the full search are hidden while the lock is on;
+  // this keeps any other path (keyboard, stale handler) honest
+  if (rolesLocked()) return runOptimizeChamps();
   rankedTabs.overall = optimize(10);
   if (!rankedTabs.overall.length) rankedTabs.overall = null;
   else applyComp(rankedTabs.overall[0]);
