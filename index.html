@@ -382,6 +382,13 @@
   /* Drafting declutters the page: roster and filters are pre-queue decisions,
      so hide them and leave draft card + win rate + slots + comps. */
   body.drafting #squadCard, body.drafting #profileCard, body.drafting .mirror-bar { display: none; }
+  /* the full optimizer lives in the squad card — surface it on the board
+     while drafting so hiding that card doesn't orphan the main action */
+  body:not(.drafting) #optFull { display: none; }
+  #draftClear {
+    margin-left: 8px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+    letter-spacing: 0; text-transform: none; flex: none;
+  }
 
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--ink-muted); font-size: 13.5px; line-height: 1.7; }
@@ -524,6 +531,7 @@ const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actuall
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
 let D = null;           // loaded dataset
+let CHAMP_BY_NAME = {}; // lowercased name -> base championId (dupes resolved)
 let META = null;        // current-patch meta stats (optional)
 let PROFILES = null;    // per-champion combat profiles (optional)
 let masteryIdx = {};    // riotId -> championId -> points
@@ -531,6 +539,7 @@ let champPairIdx = {};  // "rid|cid:rid|cid" -> {games, wins} (pilot-attributed)
 let playerPairIdx = {}; // "a|b" -> {games, wins, roles: {"roleA|roleB": {games, wins}}}
 let slots = ROLES.map(() => ({ player: null, champ: null }));
 let included = {};      // riotId -> bool
+let squadApplied = false;  // ?squad= URL param consumed (applies once)
 let indCache = {};      // memoized indScore — larger rosters make the search combinatorial
 let candCache = {};     // memoized candidates
 const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot cards
@@ -562,6 +571,9 @@ let manualBans = new Set(), manualEnemy = new Set();  // championIds
 let liveBans = new Set(), liveEnemy = new Set();      // from the LCU bridge
 let enemyRole = new Map();   // enemy cid -> our ROLES key (inferred, editable)
 let liveDraft = { ts: 0, active: false };
+let liveOurs = [];           // our team's live picks [{championId, position}]
+let liveOursByRole = {};     // role -> cid the live sync last wrote into a slot
+let autoSwapNote = null;     // "Tristana → Kai'Sa" — last automatic dead-pick swap
 let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
 let dAdjCache = {};
 const MATCHUP_WEIGHT = 1;      // matchup deltas are already small; cap below
@@ -604,16 +616,56 @@ function metaWR(champId, role) {
   return base;
 }
 
-// Most-played position for a champion this patch — the default lane we assume
-// for an enemy pick (editable on its chip).
-function inferRole(cid) {
+// Where an enemy pick is likely headed: its meta-viable lanes (≥10% role
+// rate) weighted by how often it actually goes there. A flex pick like Yasuo
+// splits its matchup weight across mid/top/bot instead of betting on one
+// guess. A manual lane on the chip collapses this to certainty, and lanes
+// manually claimed by other enemy picks are eliminated before normalizing.
+// raw=true ignores both — the full meta distribution.
+function laneDist(cid, raw = false) {
+  const manual = enemyRole.get(cid);
+  if (manual && !raw) return { [manual]: 1 };
   const m = META && META.champions[cid];
-  if (!m) return null;
-  let best = null, bestRate = 0;
-  for (const [pos, s] of Object.entries(m.positions))
-    if ((s.roleRate || 0) > bestRate) { bestRate = s.roleRate; best = pos; }
   const back = { TOP: "TOP", JUNGLE: "JUNGLE", MID: "MIDDLE", ADC: "BOTTOM", SUPPORT: "UTILITY" };
-  return back[best] || null;
+  const dist = {};
+  let listed = 0;
+  if (m) for (const [pos, s] of Object.entries(m.positions)) {
+    const role = back[pos];
+    if (!role || (s.roleRate || 0) < 0.10) continue;
+    dist[role] = s.roleRate;
+    listed += s.roleRate;
+  }
+  // OP.GG only ships a champ's headline lanes — Heimerdinger arrives as
+  // "top, 59% role rate" with the mid/support games missing entirely, and
+  // normalizing that would claim he's a 100% top-laner. Weights are kept as
+  // true probabilities (sum ≤ 1), and any large unexplained share goes to
+  // lanes the roster itself has a real sample playing the champ in.
+  const missing = Math.max(0, 1 - listed);
+  if (missing >= 0.15) {
+    const own = {};
+    let ownTotal = 0;
+    for (const p of D.players) {
+      const e = p.champions.find(c => c.championId === cid);
+      if (!e) continue;
+      for (const [r, rec] of Object.entries(e.roles)) {
+        if (rec.games < OWN_ROLE_VIABLE_GAMES || dist[r]) continue;
+        own[r] = (own[r] || 0) + rec.games;
+        ownTotal += rec.games;
+      }
+    }
+    for (const r in own) dist[r] = missing * own[r] / ownTotal;
+  }
+  if (!raw) {
+    const claimed = new Set([...effEnemy()].filter(c => c !== cid).map(c => enemyRole.get(c)).filter(Boolean));
+    for (const r of claimed) delete dist[r];
+  }
+  return dist;
+}
+
+// Prefetch matchup tables for every lane the pick might go to.
+function ensureEnemyCounters(cid) {
+  for (const r of Object.keys(laneDist(cid, true))) ensureCounters(cid, r);
+  if (enemyRole.get(cid)) ensureCounters(cid, enemyRole.get(cid));
 }
 
 // Lane-matchup records for an enemy pick, fetched once per (champ, lane) and
@@ -635,8 +687,20 @@ function ensureCounters(cid, role) {
     .catch(() => {});
 }
 
-// Matchup nudge for playing champ `cid` in `role` into the known enemy laner:
-// the complement of the enemy's WR vs us, shrunk by sample size and capped.
+// Matchup record for our champ vs an enemy in a lane. OP.GG's counter table
+// on the enemy's page omits rare opponents (an off-meta Heimerdinger mid
+// rarely makes anyone's list) — but the same matchup often still lives on OUR
+// champ's page for that lane, with the win count from the other side.
+function matchupRec(ecid, cid, role) {
+  const direct = (counterIdx[ecid + "|" + OPGG_POS[role]] || {})[cid];
+  if (direct) return direct;
+  const rev = (counterIdx[cid + "|" + OPGG_POS[role]] || {})[ecid];
+  return rev ? { play: rev.play, win: rev.play - rev.win } : null;
+}
+
+// Matchup nudge for playing champ `cid` in `role` into the enemy picks that
+// might lane there: the complement of the enemy's WR vs us, shrunk by sample
+// size, capped, and weighted by how likely that enemy is to be in this lane.
 // counters[x].win is the ENEMY champ's wins against x.
 function dAdj(cid, role) {
   if (!draftMode) return 0;
@@ -644,11 +708,12 @@ function dAdj(cid, role) {
   if (k in dAdjCache) return dAdjCache[k];
   let adj = 0;
   for (const ecid of effEnemy()) {
-    if (enemyRole.get(ecid) !== role) continue;
-    const rec = (counterIdx[ecid + "|" + OPGG_POS[role]] || {})[cid];
+    const w = laneDist(ecid)[role] || 0;
+    if (!w) continue;
+    const rec = matchupRec(ecid, cid, role);
     if (!rec || rec.play < 20) continue;
     const edge = (0.5 - rec.win / rec.play) * (rec.play / (rec.play + 50)) * MATCHUP_WEIGHT;
-    adj += Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, edge));
+    adj += w * Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, edge));
   }
   return dAdjCache[k] = adj;
 }
@@ -838,7 +903,9 @@ function optimizeChamps(topN = 10) {
 // champions. With 9+ players this is millions of combinations, so the inner
 // loop is allocation-free: scores are computed from cached numbers and a comp
 // object is only built when it beats the current top-N floor.
-function optimize(topN = 10) {
+// fixed: {ROLE: championId} — champs our team already locked in the client;
+// the role is pinned to that champ while players and other roles stay fluid.
+function optimize(topN = 10, fixed = {}) {
   const pool = D.players.map(p => p.riotId).filter(r => included[r]);
   if (pool.length < 5) return [];
   const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
@@ -847,7 +914,8 @@ function optimize(topN = 10) {
   if (!pairBoostIdx) buildPairBoost();
   for (const five of playerSets) {
     for (const perm of permutations(five)) {
-      const cands = perm.map((rid, i) => candidates(rid, ROLES[i]));
+      const cands = perm.map((rid, i) =>
+        fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i]));
       if (cands.some(c => !c.length)) continue;
       // player-pair synergy is constant for this role assignment
       let permPairs = 0, champSynBound = 0;
@@ -1016,6 +1084,7 @@ function render() {
         <div class="card" id="draftCard" hidden style="margin-bottom:18px"></div>
         <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
+          <button class="btn" id="optFull" title="Full search over players, roles, and champions">Optimize comp</button>
         </div>
         <div class="roles" id="slots"></div>
         <div class="mirror-bar">
@@ -1038,7 +1107,8 @@ function render() {
         </div>
       </div>
     </div>
-    <datalist id="champdl">${Object.values(D.champions).map(c => `<option value="${c.name}">`).join("")}</datalist>`;
+    <datalist id="champdl">${Object.keys(CHAMP_BY_NAME).sort()
+      .map(k => `<option value="${champName(CHAMP_BY_NAME[k])}">`).join("")}</datalist>`;
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
@@ -1093,6 +1163,7 @@ function render() {
   $("#flexToggle2").addEventListener("click", () => $("#flexToggle").click());
   $("#roleToggle2").addEventListener("click", () => $("#roleToggle").click());
   $("#opt").addEventListener("click", runOptimize);
+  $("#optFull").addEventListener("click", runOptimize);
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
@@ -1110,10 +1181,17 @@ function renderDraft() {
   const chip = (cid, kind) => {
     const isLive = kind === "ban" ? liveBans.has(cid) : liveEnemy.has(cid);
     const manual = kind === "ban" ? manualBans.has(cid) : manualEnemy.has(cid);
-    const roleSel = kind === "enemy" ? `<select data-erole="${cid}" title="their lane (guessed from the meta — fix if wrong)">
-        <option value="">lane?</option>
+    let roleSel = "";
+    if (kind === "enemy") {
+      const guess = Object.entries(laneDist(cid, true)).sort((a, b) => b[1] - a[1]);
+      const auto = guess.length
+        ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
+        : "lane?";
+      roleSel = `<select data-erole="${cid}" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
+        <option value="">${auto}</option>
         ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
-      </select>` : "";
+      </select>`;
+    }
     return `<span class="dchip ${isLive ? "live" : ""}" title="${isLive ? "from live sync" : ""}">
       <img src="${champIcon(cid)}" alt="">${champName(cid)}${roleSel}
       ${manual && !isLive ? `<button data-remove="${kind}:${cid}" title="remove">✕</button>` : ""}
@@ -1123,6 +1201,8 @@ function renderDraft() {
   el.innerHTML = `
     <h2>Draft
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
+      ${manualBans.size || manualEnemy.size
+        ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans and enemy picks">Clear</button>` : ""}
     </h2>
     <div class="draft-row">
       <span class="dlabel">Bans</span>
@@ -1134,29 +1214,44 @@ function renderDraft() {
       ${enemy.map(c => chip(c, "enemy")).join("")}
       <input class="dinput" id="enemyInput" list="champdl" placeholder="add enemy pick…">
     </div>
+    ${liveOurs.length ? `<div class="draft-row">
+      <span class="dlabel">Ours</span>
+      ${liveOurs.map(p => `<span class="dchip live" title="locked in the client">
+        <img src="${champIcon(p.championId)}" alt="">${champName(p.championId)}${ROLE_LABEL[p.position] ? `&nbsp;· ${ROLE_LABEL[p.position]}` : ""}
+      </span>`).join("")}
+    </div>` : ""}
     ${enemy.length && PROFILES
-      ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs their laner:</div>` + profileHTML(enemy)
+      ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs whoever might lane against them:</div>` + profileHTML(enemy)
       : `<div class="hint">Banned and enemy-picked champs drop out of candidates and the optimizer. Run <code>python3 lcu_bridge.py</code> next to the League client to sync this automatically.</div>`}
   `;
   updateLiveIndicator();
-  const resolve = v => {
-    const name = v.trim().toLowerCase();
-    const e = Object.entries(D.champions).find(([, c]) => c.name.toLowerCase() === name);
-    return e ? +e[0] : null;
+  const resolve = v => CHAMP_BY_NAME[v.trim().toLowerCase()] ?? null;
+  // commit on change AND on Enter — during a timed ban phase the input has to
+  // land without hunting for somewhere to click to blur
+  const wire = (sel, add) => {
+    const inp = el.querySelector(sel);
+    const commit = () => {
+      const cid = resolve(inp.value);
+      if (cid == null) return;
+      add(cid);
+      inp.value = "";
+      draftChanged();
+      el.querySelector(sel).focus();
+    };
+    inp.addEventListener("change", commit);
+    inp.addEventListener("keydown", e => { if (e.key === "Enter") commit(); });
   };
-  const wire = (sel, add) => el.querySelector(sel).addEventListener("change", e => {
-    const cid = resolve(e.target.value);
-    if (cid == null) return;
-    add(cid);
-    e.target.value = "";
-    draftChanged();
-    el.querySelector(sel).focus();
-  });
   wire("#banInput", cid => manualBans.add(cid));
   wire("#enemyInput", cid => {
     manualEnemy.add(cid);
-    if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
-    ensureCounters(cid, enemyRole.get(cid));
+    ensureEnemyCounters(cid);
+  });
+  const clr = el.querySelector("#draftClear");
+  if (clr) clr.addEventListener("click", () => {
+    manualBans.clear();
+    manualEnemy.clear();
+    for (const cid of [...enemyRole.keys()]) if (!liveEnemy.has(cid)) enemyRole.delete(cid);
+    draftChanged();
   });
   el.querySelectorAll("[data-remove]").forEach(b => b.addEventListener("click", () => {
     const [kind, cid] = b.dataset.remove.split(":");
@@ -1166,7 +1261,7 @@ function renderDraft() {
   el.querySelectorAll("[data-erole]").forEach(s => s.addEventListener("change", e => {
     const cid = +e.target.dataset.erole;
     enemyRole.set(cid, e.target.value || null);
-    ensureCounters(cid, enemyRole.get(cid));
+    ensureEnemyCounters(cid);
     draftChanged();
   }));
 }
@@ -1183,13 +1278,73 @@ function updateLiveIndicator() {
   } else { dot.className = "live-dot"; msg.textContent = "reconnecting — manual entry works"; }
 }
 
+// A slotted champ just got banned or enemy-picked: swap in the best still-
+// available candidate for that player+role instead of leaving a dead board.
+// Judged by full comp score when the board is complete (synergy counts), by
+// slot score otherwise. Returns swap descriptions, or null if nothing died.
+function autoReplaceDead() {
+  if (!draftMode) return null;
+  const swaps = [];
+  for (let i = 0; i < 5; i++) {
+    const s = slots[i];
+    if (!s.player || !s.champ || !draftUnavailable(s.champ)) continue;
+    const used = new Set(slots.map(x => x.champ));
+    const cands = candidates(s.player, ROLES[i], 15).filter(c => !used.has(c));
+    if (!cands.length) continue;
+    const full = slots.every((x, j) => x.player && (j === i || x.champ));
+    let best = cands[0];
+    if (full) {
+      let bestT = -Infinity;
+      for (const c of cands) {
+        const trial = slots.map((x, j) => ({ player: x.player, champ: j === i ? c : x.champ, role: ROLES[j] }));
+        const t = compScore(trial).total;
+        if (t > bestT) { bestT = t; best = c; }
+      }
+    }
+    swaps.push(`${champName(s.champ)} → ${champName(best)}`);
+    slots[i].champ = best;
+  }
+  return swaps.length ? swaps : null;
+}
+
+// While a draft is underway, every ban and pick re-runs the full role-
+// agnostic optimizer over the checked squad — champs our team has locked in
+// the client are pinned to their role, everything else stays fluid. Returns
+// false when it can't run (no live draft, pool too small) so the cheaper
+// keep-roles dead-pick swap can take over.
+function autoOptimize(deadNames) {
+  if (!draftMode) return false;
+  if (!liveDraft.active && !effBans().size && !effEnemy().size) return false;
+  if (D.players.filter(p => included[p.riotId]).length < 5) return false;
+  const fixed = {};
+  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) fixed[p.position] = p.championId;
+  const res = optimize(10, fixed);
+  if (!res.length) return false;
+  const before = slots.map(s => s.player + "|" + s.champ).join();
+  const hadChamps = slots.some(s => s.champ);
+  res[0].assign.forEach((a, i) => { slots[i] = { player: a.player, champ: a.champ }; });
+  rankedTabs.overall = res;
+  if (hadChamps && slots.map(s => s.player + "|" + s.champ).join() !== before)
+    autoSwapNote = deadNames.length
+      ? `re-optimized — ${deadNames.join(", ")} no longer available`
+      : "re-optimized for the draft";
+  return true;
+}
+
 // Draft state changed: matchup + candidate caches are stale; re-rank any
 // results the user is currently looking at.
 function draftChanged(rerenderCard = true) {
   dAdjCache = {};
   candCache = {};
+  const dead = slots.filter(s => s.champ && draftUnavailable(s.champ)).map(s => champName(s.champ));
   const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall };
   rankedTabs.assigned = rankedTabs.overall = null;
+  if (autoOptimize(dead)) {
+    had.overall = true;  // fresh results are worth showing
+  } else {
+    const swaps = autoReplaceDead();
+    if (swaps) autoSwapNote = swaps.join(", ");
+  }
   if (rerenderCard) renderDraft();
   renderSlots();
   renderScore();
@@ -1201,9 +1356,19 @@ function applyLiveDraft(j) {
   liveDraft = j;
   liveBans = new Set(j.active ? j.bans || [] : []);
   liveEnemy = new Set(j.active ? j.enemy || [] : []);
-  for (const cid of liveEnemy) {
-    if (!enemyRole.has(cid)) enemyRole.set(cid, inferRole(cid));
-    ensureCounters(cid, enemyRole.get(cid));
+  liveOurs = j.active ? j.ours || [] : [];
+  for (const cid of liveEnemy) ensureEnemyCounters(cid);
+  // Reflect our own locked picks on the board: fill the matching role's champ,
+  // but never clobber a champ the user chose themselves — only empty slots and
+  // slots this sync wrote earlier follow the client.
+  if (j.active) for (const p of liveOurs) {
+    const i = ROLES.indexOf(p.position);
+    if (i < 0 || !p.championId) continue;
+    const cur = slots[i].champ;
+    if (cur == null || cur === liveOursByRole[p.position] || cur === p.championId) {
+      slots[i].champ = p.championId;
+      liveOursByRole[p.position] = p.championId;
+    }
   }
   draftChanged();
 }
@@ -1361,6 +1526,31 @@ function renderSlots() {
           stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
         if (draftUnavailable(s.champ))
           stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!" : "enemy took it!"}</span>`;
+        // surface the matchups the score silently includes — the meta win rate
+        // of this champ against each enemy pick that might lane here, with the
+        // lane odds shown when the enemy pick is flexible
+        if (draftMode) {
+          for (const ecid of effEnemy()) {
+            const w = laneDist(ecid)[role] || 0;
+            if (!w) continue;
+            // our own champ's counter table backs rare matchups the enemy's
+            // table omits — fetch it too (cached; re-renders when it lands)
+            ensureCounters(s.champ, role);
+            // "vs Shen (top 70%): 50.0% wr" — the odds belong to the lane
+            // guess, not the win rate, so keep them attached to the name
+            const who = w < 1
+              ? `${champName(ecid)} <span class="dim">(${ROLE_LABEL[role].toLowerCase()} ${Math.round(w * 100)}%)</span>`
+              : champName(ecid);
+            const rec = matchupRec(ecid, s.champ, role);
+            if (rec && rec.play >= 20) {
+              const wr = 1 - rec.win / rec.play;
+              const cls = wr > 0.505 ? "pos" : wr < 0.495 ? "neg" : "dim";
+              stat += `<br><span class="dim">vs</span> ${who}<span class="dim">:</span> <span class="${cls}" title="meta lane matchup, ${rec.play} games">${pct(wr)} wr</span>`;
+            } else {
+              stat += `<br><span class="dim">vs</span> ${who}<span class="dim">: no data</span>`;
+            }
+          }
+        }
         stat += `<br><span class="scorechip">score ${pct(slotScore(s.player, s.champ, role))}</span>`;
       }
     }
@@ -1376,6 +1566,7 @@ function renderSlots() {
     </div>`;
   }).join("");
   document.querySelectorAll("#slots select").forEach(sel => sel.addEventListener("change", e => {
+    autoSwapNote = null;  // the user is steering again
     const i = +e.target.dataset.slot;
     if (e.target.dataset.kind === "player") {
       slots[i].player = e.target.value || null;
@@ -1405,12 +1596,21 @@ function renderScore() {
   const sc = compScore(assign);
   $("#hero").textContent = pct(sc.total);
   $("#meter").style.width = (sc.total * 100) + "%";
-  const v = verdict(sc.total);
+  // A banned or enemy-taken champ makes the whole estimate fiction — say so
+  // where the user is actually looking instead of only in one slot's fine print.
+  const dead = assign.filter(a => draftUnavailable(a.champ));
+  const v = dead.length
+    ? { label: dead.map(a => champName(a.champ)).join(", ")
+        + (effBans().has(dead[0].champ) ? " banned" : " taken") + " — re-optimize", cls: "bad" }
+    : verdict(sc.total);
   verdictEl.hidden = false;
   verdictEl.textContent = v.label;
   verdictEl.className = "verdict" + (v.cls ? " " + v.cls : "");
   const synCls = sc.syn >= 0 ? "pos" : "neg";
   $("#breakdown").innerHTML =
+    (autoSwapNote
+      ? `<b style="color:var(--gold-soft)">auto-swapped ${autoSwapNote}</b> — pick was banned or taken<br>`
+      : "") +
     `Individual baseline: <b>${pct(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
     `Average of the five slot scores: each player's win rate on their champion in that role ` +
     `(shrunk toward the champ's current-patch meta WR), plus mastery bonus and role comfort, ` +
@@ -1564,6 +1764,7 @@ function runOptimizeChamps() {
 }
 
 function applyComp(r) {
+  autoSwapNote = null;  // a freshly chosen comp supersedes any auto-swap
   // Loading a comp can reassign players to new roles, which makes any cached
   // "Roles as set" results stale (champ-only clicks keep the same mapping).
   const mappingChanged = r.assign.some((a, i) => slots[i].player !== a.player);
@@ -1629,6 +1830,25 @@ function applyData(players, meta, profiles) {
   indCache = {}; candCache = {}; pairBoostIdx = null;
   for (const k of Object.keys(roleShareCache)) delete roleShareCache[k];
   rankedTabs.assigned = rankedTabs.overall = null;
+  // Data Dragon lists game-mode variant units (Jade_Annie, id 60001, …) that
+  // share display names with real champions — name lookups always resolve to
+  // the base champ (lowest id), and the datalist shows each name once.
+  CHAMP_BY_NAME = {};
+  for (const [id, c] of Object.entries(D.champions)) {
+    const k = c.name.toLowerCase();
+    if (!(k in CHAMP_BY_NAME) || +id < CHAMP_BY_NAME[k]) CHAMP_BY_NAME[k] = +id;
+  }
+  // ?squad=gimly,secondcoming,… preselects exactly these players (name match,
+  // tag optional, case-insensitive) — handy for demos and fixed 5-stacks.
+  if (!squadApplied) {
+    squadApplied = true;
+    const q = new URLSearchParams(location.search).get("squad");
+    if (q) {
+      const want = new Set(q.toLowerCase().split(",").map(s => s.trim()).filter(Boolean));
+      for (const p of D.players)
+        included[p.riotId] = want.has(p.riotId.toLowerCase()) || want.has(p.riotId.split("#")[0].toLowerCase());
+    }
+  }
   for (const p of D.players) {
     if (!(p.riotId in included)) included[p.riotId] = true;
     masteryIdx[p.riotId] = Object.fromEntries(p.mastery.map(m => [m.championId, m.points]));
@@ -1732,6 +1952,7 @@ function initDraftToggle() {
   setDraftLive(draftMode);
   t.addEventListener("click", () => {
     draftMode = !draftMode;
+    autoSwapNote = null;
     localStorage.setItem("draftMode", draftMode ? "1" : "0");
     t.classList.toggle("active", draftMode);
     document.body.classList.toggle("drafting", draftMode);
