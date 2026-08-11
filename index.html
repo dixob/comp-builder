@@ -1964,7 +1964,19 @@ function renderSlots() {
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
         const e = p.champions.find(c => c.championId === s.champ);
-        stat = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : `<span class="dim">no ranked games</span>`;
+        // In Role WR mode the score only sees the in-role record, so that
+        // becomes the headline number and the all-roles record dims beneath
+        // it — otherwise a 52.8% Ekko card can hide the 33% jungle record
+        // the score actually used.
+        const allRec = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : null;
+        if (!e) stat = `<span class="dim">no ranked games</span>`;
+        else if (strictRole) {
+          const rr = e.roles[role] || { games: 0, wins: 0 };
+          stat = (rr.games
+            ? `${ROLE_LABEL[role].toLowerCase()} ${rr.wins}W ${rr.games - rr.wins}L (${pct(rr.wins / rr.games)})`
+            : `<span class="dim">no ${ROLE_LABEL[role].toLowerCase()} games — scored at meta prior</span>`)
+            + `<br><span class="dim">all roles ${allRec}</span>`;
+        } else stat = allRec;
         if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
         const pts = (masteryIdx[s.player] || {})[s.champ];
         stat += `<br><span class="dim">mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}</span>`;
