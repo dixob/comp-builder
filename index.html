@@ -288,7 +288,9 @@
   .mirror-bar .mfloor { margin-top: 0; flex: 1 1 130px; max-width: 240px; }
   .mirror-bar .toggle + .mfloor { margin-left: auto; }  /* first slider after the toggles pushes the group right */
   .roles { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--sp-2); }
-  @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); } }
+  /* 136px keeps all five slots on one row on a base iPad — 1180pt landscape
+     (731px main column) and 820pt portrait (single column) both fit 5 tracks */
+  @media (max-width: 1200px) { .roles { grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); } }
   .slot {
     background: var(--layer-1);
     border-radius: var(--radius);
@@ -304,7 +306,8 @@
   .slot h3 svg { color: var(--accent); flex: none; }
   select {
     width: 100%; font: inherit; font-size: 13px;
-    padding: 7px 8px; margin-bottom: var(--sp-2);
+    padding: 7px 22px 7px 8px; margin-bottom: var(--sp-2);
+    text-overflow: ellipsis;
     background: var(--layer-2); color: var(--text-primary);
     border: 1px solid var(--outline); border-radius: 8px;
     cursor: pointer; transition: border-color 70ms var(--ease-standard);
@@ -480,6 +483,21 @@
   }
   .info:hover .tip, .info:focus .tip { display: block; }
   code { background: var(--layer-2); padding: 2px 7px; border-radius: 6px; font-size: 12px; color: var(--accent); }
+  /* ---- touch (iPad/phone, any orientation) ---- */
+  @media (pointer: coarse) {
+    /* <16px text inputs trigger iPadOS/iOS Safari's zoom-on-focus */
+    select, .dinput { font-size: 16px; }
+    .btn { min-height: 44px; }
+    #draftClear { min-height: 0; }
+    .player input { width: 20px; height: 20px; }
+    .dualrange { height: 32px; }
+    .dualrange input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
+    .dualrange input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; }
+    .dchip button { padding: 4px 8px; }
+    .tabs button { padding: 8px 16px; }
+    .info { width: 20px; height: 20px; line-height: 18px; font-size: 12px; }
+  }
+
   /* ---- mobile ---- */
   .h2tabs { margin-left: auto; }
   @media (max-width: 600px) {
