@@ -220,7 +220,10 @@
     border-color: var(--accent);
     background: var(--accent-dim);
   }
-  .lowdata { display: block; font-size: 11px; line-height: 16px; color: var(--warning); margin-top: 1px; }
+  /* inline so filter warnings never change a player row's height — the games
+     slider sits below the roster and would jump mid-drag otherwise */
+  .lowdata { font-size: 11px; line-height: 16px; color: var(--warning); }
+  .player .tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mfloor { margin-top: var(--sp-4); }
   .mfloor label { display: flex; justify-content: space-between; font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-bottom: 6px; }
   .mfloor label b { color: var(--text-primary); font-weight: 600; }
@@ -646,8 +649,8 @@ const inMasteryRange = pts => pts >= masteryMin && (masteryMax >= MASTERY_OFF ||
 // are filtered from candidate lists — too few games means the record is
 // noise, too many means the pick is predictable/bannable. A max slider at
 // MAX_GAMES_OFF means no upper cap.
-const MAX_GAMES_OFF = 120;
-let minGames = +(localStorage.getItem("minGames") ?? 0);
+const MAX_GAMES_OFF = 31;  // slider runs 0–30; the top notch means no ceiling
+let minGames = Math.min(+(localStorage.getItem("minGames") ?? 0), MAX_GAMES_OFF - 1);
 let maxGames = +(localStorage.getItem("maxGames") ?? MAX_GAMES_OFF);
 const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
 // Strict role WRs: champion win rates count only games in the assigned role
@@ -1150,7 +1153,7 @@ function render() {
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}</span><span data-notes="${p.riotId}">${playerNotes(p)}</span></span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}<span data-notes="${p.riotId}">${playerNotes(p)}</span></span></span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
@@ -1545,7 +1548,8 @@ function playerNotes(p) {
     if (n === 0) notes.push(`no champs in games range`);
     else if (n < 5) notes.push(`only ${n} champ${n > 1 ? "s" : ""} in games range`);
   }
-  return notes.map(n => `<span class="lowdata">${n}</span>`).join("");
+  // rendered inline on the tag line (fixed row height — see .lowdata note)
+  return notes.length ? ` · <span class="lowdata" title="${notes.join("; ")}">${notes.join(" · ")}</span>` : "";
 }
 
 function updateSquadNotes() {
