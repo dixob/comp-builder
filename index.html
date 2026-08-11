@@ -104,7 +104,9 @@
   }
 
   * { box-sizing: border-box; }
-  html { scrollbar-gutter: stable; }
+  /* a horizontal drag near the screen edge must never become Chrome's
+     back/forward navigation gesture — sliders live near the edges */
+  html { scrollbar-gutter: stable; overscroll-behavior-x: none; }
   body {
     margin: 0;
     font-family: "Inter", "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
@@ -458,7 +460,7 @@
   .slot .banned-note { color: var(--negative); font-weight: 600; font-size: 12px; }
   /* Drafting declutters the page: roster and filters are pre-queue decisions,
      so hide them and leave draft card + win rate + slots + comps. */
-  body.drafting #squadCard, body.drafting #profileCard, body.drafting .mirror-bar { display: none; }
+  body.drafting #squadCard, body.drafting #profileCard { display: none; }
   /* the full optimizer lives in the squad card — surface it on the board
      while drafting so hiding that card doesn't orphan the main action */
   body:not(.drafting) #optFull { display: none; }
@@ -491,6 +493,10 @@
   @media (pointer: coarse) {
     /* <16px text inputs trigger iPadOS/iOS Safari's zoom-on-focus */
     select, .dinput { font-size: 16px; }
+    /* keep slider thumbs out of the browser's edge-swipe zone, and give the
+       thumbs full control of their touches (no scroll/nav interpretation) */
+    .mfloor { padding-inline: 16px; }
+    .dualrange input[type="range"], .mfloor input[type="range"] { touch-action: none; }
     .btn { min-height: 44px; }
     #draftClear { min-height: 0; }
     .player input { width: 20px; height: 20px; }
