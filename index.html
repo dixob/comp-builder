@@ -733,6 +733,11 @@ const PAIR_OVERLAP_DISCOUNT = 0.25;
 const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
 const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
+// Strict mode halves that instead of zeroing it: a 1W-5L mid record is still
+// evidence about how the player pilots the champ, and zero weight let a champ
+// they demonstrably lose on score as a fresh meta-prior unknown ("hidden bad
+// data") while a real bad in-role record counted fully against its rival.
+const OFF_ROLE_GAME_WEIGHT_STRICT = 0.15;
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actually logged games on
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
@@ -765,8 +770,10 @@ const MAX_GAMES_OFF = 31;  // slider runs 0–30; the top notch means no ceiling
 let minGames = Math.min(+(localStorage.getItem("minGames") ?? 0), MAX_GAMES_OFF - 1);
 let maxGames = +(localStorage.getItem("maxGames") ?? MAX_GAMES_OFF);
 const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
-// Strict role WRs: champion win rates count only games in the assigned role
-// (off-role games contribute nothing instead of OFF_ROLE_GAME_WEIGHT).
+// Strict role WRs: the in-role record dominates a champion's score and the
+// candidate "played" tier counts only in-role games; off-role games still
+// contribute at OFF_ROLE_GAME_WEIGHT_STRICT so champ-skill evidence is never
+// discarded outright.
 let strictRole = localStorage.getItem("strictRole") === "1";
 
 // --- draft mode ------------------------------------------------------------
@@ -989,7 +996,7 @@ function indScore(riotId, champId, role) {
   const prior = metaWR(champId, role);
   let wr;
   if (entry) {
-    const offW = strictRole ? 0 : OFF_ROLE_GAME_WEIGHT;
+    const offW = strictRole ? OFF_ROLE_GAME_WEIGHT_STRICT : OFF_ROLE_GAME_WEIGHT;
     const roleRec = entry.roles[role] || { games: 0, wins: 0 };
     const g = roleRec.games + (entry.games - roleRec.games) * offW;
     const w = roleRec.wins + (entry.wins - roleRec.wins) * offW;
@@ -1090,7 +1097,11 @@ function candidates(riotId, role, n = 3) {
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
     avail: !draftUnavailable(cid) && !counterAvoid.has(cid),
-    played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
+    // in strict Role WR mode "played" means played IN THIS ROLE — a champ
+    // with a real sample elsewhere but none here drops out of the top tier
+    played: (strictRole
+      ? (((pool.get(cid) || {}).roles || {})[role] || { games: 0 }).games
+      : (pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
   // The mastery floor, games range, and draft availability (including champs
   // the player agreed to draft around after a hard-counter flag) are hard
@@ -1974,7 +1985,7 @@ function renderSlots() {
           const rr = e.roles[role] || { games: 0, wins: 0 };
           stat = (rr.games
             ? `${ROLE_LABEL[role].toLowerCase()} ${rr.wins}W ${rr.games - rr.wins}L (${pct(rr.wins / rr.games)})`
-            : `<span class="dim">no ${ROLE_LABEL[role].toLowerCase()} games — scored at meta prior</span>`)
+            : `<span class="dim">no ${ROLE_LABEL[role].toLowerCase()} games — scored from meta prior + off-role record</span>`)
             + `<br><span class="dim">all roles ${allRec}</span>`;
         } else stat = allRec;
         if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
