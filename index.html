@@ -464,10 +464,11 @@
   /* the full optimizer lives in the squad card — surface it on the board
      while drafting so hiding that card doesn't orphan the main action */
   body:not(.drafting) #optFull { display: none; }
-  #draftClear {
+  #draftClear, #roleLockBtn {
     margin-left: var(--sp-2); padding: 3px 10px; height: auto; font-size: 11px; font-weight: 500;
     letter-spacing: 0; text-transform: none; flex: none;
   }
+  #roleLockBtn { margin-left: auto; }  /* pushes itself (and Clear) right */
   .counter-flag { margin-bottom: 8px; }
   .counter-flag .banned-note { color: var(--negative); font-weight: 600; }
   .counter-flag .btn {
@@ -599,7 +600,7 @@
     .mfloor { padding-inline: 16px; }
     .dualrange input[type="range"], .mfloor input[type="range"] { touch-action: none; }
     .btn { min-height: 44px; }
-    #draftClear { min-height: 0; }
+    #draftClear, #roleLockBtn { min-height: 0; }
     .player input { width: 20px; height: 20px; }
     .dualrange { height: 32px; }
     .dualrange input[type="range"]::-webkit-slider-thumb { width: 24px; height: 24px; }
@@ -781,6 +782,10 @@ let strictRole = localStorage.getItem("strictRole") === "1";
 // the worker) become unavailable, and known lane opponents nudge pick scores
 // with OP.GG matchup records.
 let draftMode = localStorage.getItem("draftMode") === "1";
+// "We're playing these roles this game": auto re-optimization on bans/enemy
+// picks re-picks champions only and never reshuffles player→role. Manual
+// actions (pin drags, the full-search button) still override.
+let lockRoles = localStorage.getItem("lockRoles") === "1";
 let manualBans = new Set(), manualEnemy = new Set();  // championIds
 let liveBans = new Set(), liveEnemy = new Set();      // from the LCU bridge
 let enemyRole = new Map();   // enemy cid -> our ROLES key (inferred, editable)
@@ -1134,10 +1139,12 @@ function* permutations(arr) {
 
 // Champion-only optimization: keep the player→role assignment currently in
 // the slots (e.g. what you got from fill) and search champions only.
-function optimizeChamps(topN = 10) {
+// fixed: {ROLE: championId} — champs already locked in the client stay put.
+function optimizeChamps(topN = 10, fixed = {}) {
   const players = slots.map(s => s.player);
   if (players.some(p => !p) || new Set(players).size !== 5) return null;
-  const cands = players.map((rid, i) => candidates(rid, ROLES[i], 8));
+  const cands = players.map((rid, i) =>
+    fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i], 8));
   const results = [];
   const idx = [0, 0, 0, 0, 0];
   while (true) {
@@ -1448,6 +1455,8 @@ function renderDraft() {
   el.innerHTML = `
     <h2>Summoner's Rift
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
+      <button class="btn toggle ${lockRoles ? "active" : ""}" id="roleLockBtn"
+        title="We're playing these roles: bans and enemy picks only re-pick champions — the optimizer never reshuffles who plays where. Pin drags and the full Optimize comp button still override.">Lock roles</button>
       ${manualBans.size || manualEnemy.size
         ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans and enemy picks">Clear</button>` : ""}
     </h2>
@@ -1488,6 +1497,11 @@ function renderDraft() {
   wire("#enemyInput", cid => {
     manualEnemy.add(cid);
     ensureEnemyCounters(cid);
+  });
+  el.querySelector("#roleLockBtn").addEventListener("click", () => {
+    lockRoles = !lockRoles;
+    localStorage.setItem("lockRoles", lockRoles ? "1" : "0");
+    draftChanged();  // re-optimize under the new regime + repaint the toggle
   });
   const clr = el.querySelector("#draftClear");
   if (clr) clr.addEventListener("click", () => {
@@ -1768,16 +1782,19 @@ function autoOptimize(deadNames) {
   if (D.players.filter(p => included[p.riotId]).length < 5) return false;
   const fixed = {};
   for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) fixed[p.position] = p.championId;
-  const res = optimize(10, fixed);
+  // Roles locked: search champions only, players stay in their lanes. An
+  // incomplete board falls through to autoReplaceDead, which is also
+  // role-preserving.
+  const res = lockRoles ? (optimizeChamps(10, fixed) || []) : optimize(10, fixed);
   if (!res.length) return false;
   const before = slots.map(s => s.player + "|" + s.champ).join();
   const hadChamps = slots.some(s => s.champ);
   res[0].assign.forEach((a, i) => { slots[i] = { player: a.player, champ: a.champ }; });
   rankedTabs.overall = res;
   if (hadChamps && slots.map(s => s.player + "|" + s.champ).join() !== before)
-    autoSwapNote = deadNames.length
+    autoSwapNote = (deadNames.length
       ? `re-optimized — ${deadNames.join(", ")} no longer available`
-      : "re-optimized for the draft";
+      : "re-optimized for the draft") + (lockRoles ? " (roles locked)" : "");
   return true;
 }
 
