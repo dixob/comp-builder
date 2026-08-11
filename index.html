@@ -468,6 +468,104 @@
     margin-left: var(--sp-2); padding: 3px 10px; height: auto; font-size: 11px; font-weight: 500;
     letter-spacing: 0; text-transform: none; flex: none;
   }
+  .counter-flag { margin-bottom: 8px; }
+  .counter-flag .banned-note { color: var(--negative); font-weight: 600; }
+  .counter-flag .btn {
+    margin-left: 6px; padding: 2px 10px; height: auto; font-size: 11px; font-weight: 500;
+    letter-spacing: 0; text-transform: none;
+  }
+
+  /* ---- rift map ----
+     Stylized Summoner's Rift shown while drafting: our comp pins on blue
+     side, enemy pins on red. Geometry is a 100×100 viewBox, y down — blue
+     base bottom-left, red base top-right, river on the y=x diagonal. */
+  /* capped so the single-column iPad layout doesn't blow it up full-width */
+  .rift { position: relative; aspect-ratio: 1; max-width: 420px; margin: 0 auto var(--sp-4); }
+  /* direct child only — the pins carry their own little role-icon svgs */
+  .rift > svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .rf-ground { fill: var(--layer-2); }
+  .rf-side.ours { fill: var(--accent); opacity: 0.05; }
+  .rf-side.enemy { fill: var(--enemy); opacity: 0.05; }
+  .rf-river { stroke: var(--accent); opacity: 0.16; stroke-width: 9; stroke-linecap: round; }
+  .rf-pit { fill: var(--layer-3); }
+  .rf-lane { fill: none; stroke: var(--layer-3); stroke-width: 6; stroke-linecap: round; }
+  .rf-base.ours { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 1.5; }
+  .rf-base.enemy { fill: var(--enemy-dim); stroke: var(--enemy); stroke-width: 1.5; }
+  .rpin {
+    position: absolute; transform: translate(-50%, -50%);
+    width: 34px; height: 34px; border-radius: 50%;
+    display: grid; place-items: center;
+    border: 2px solid; background: var(--layer-1);
+    box-shadow: var(--elev-sm);
+    /* opacity-only entrance: `rise` ends at transform:none, which would
+       cancel the centering translate */
+    animation: rpin-in 150ms var(--ease-entrance) both;
+    transition: transform 70ms var(--ease-standard);
+  }
+  @keyframes rpin-in { from { opacity: 0; } }
+  .rpin:hover { transform: translate(-50%, -50%) scale(1.12); z-index: 5; }
+  .rpin.ours { border-color: var(--accent); }
+  .rpin.enemy { border-color: var(--enemy); }
+  /* dashed ring = the lane is a guess, not a lock — never color alone */
+  .rpin.guess { border-style: dashed; }
+  /* "rpin-empty", not "empty" — .empty is already the page's empty-state
+     style and its padding would balloon the pin */
+  .rpin.rpin-empty { border-style: dashed; background: none; box-shadow: none; opacity: 0.45; }
+  .rpin.rpin-empty.ours { color: var(--accent); }
+  .rpin.rpin-empty.enemy { color: var(--enemy); }
+  .rpin img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
+  .rname {
+    position: absolute; top: calc(100% + 3px); left: 50%; transform: translateX(-50%);
+    font-size: 10px; line-height: 12px; font-weight: 600; white-space: nowrap;
+    color: var(--text-primary); background: var(--layer-1);
+    border-radius: 999px; padding: 1px 6px;
+    box-shadow: var(--elev-sm);
+    pointer-events: none;
+  }
+  .rpin::after {
+    content: attr(data-tip);
+    position: absolute; left: 50%; bottom: calc(100% + 8px);
+    transform: translateX(-50%) translateY(2px);
+    background: var(--layer-3); color: var(--text-primary);
+    border-radius: 8px;
+    padding: 5px 10px; font-size: 12px; font-weight: 500; white-space: nowrap;
+    box-shadow: var(--elev-md);
+    opacity: 0; pointer-events: none; z-index: 6;
+    transition: opacity 110ms var(--ease-entrance), transform 110ms var(--ease-entrance);
+  }
+  .rpin:hover::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+  button.rpin { font: inherit; padding: 0; cursor: pointer; }
+  .rpin, .rpin img { user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
+  /* our pins drag between lane anchors to reassign roles */
+  .rpin.ours { cursor: grab; touch-action: none; }
+  .rpin.dragging { z-index: 8; cursor: grabbing; transition: none; box-shadow: var(--elev-lg); }
+  .rpin.drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; }
+  .rname .rp {
+    display: block; font-weight: 500; font-size: 9px; line-height: 11px;
+    color: var(--text-secondary); text-align: center;
+  }
+  /* team labels sit on the fountains */
+  .rside {
+    position: absolute; transform: translate(-50%, -50%);
+    font-size: 9px; line-height: 1; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    pointer-events: none;
+  }
+  .rside.ours { left: 9%; top: 91%; color: var(--accent); }
+  .rside.enemy { left: 91%; top: 9%; color: var(--enemy); }
+  .rift-pop {
+    position: absolute; z-index: 9; min-width: 150px;
+    background: var(--layer-3); border-radius: 8px; padding: 10px 12px;
+    box-shadow: var(--elev-lg);
+    display: grid; gap: 8px; font-size: 13px; text-align: left;
+  }
+  .rift-pop select { margin: 0; font-size: 12px; }
+  .rift-pop .btn { height: auto; padding: 5px 10px; font-size: 12px; font-weight: 500; }
+  .rlive { color: var(--positive); font-size: 11px; font-weight: 500; }
+  .bchip { padding: 3px; }
+  .bchip img { width: 24px; height: 24px; border-radius: 6px; }
+  /* compact enemy chips are the phone fallback — everywhere else the map
+     (hidden on phones) owns enemy management via its pins */
+  @media (min-width: 601px) { .echip { display: none; } }
 
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
@@ -505,6 +603,8 @@
     .dualrange input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; }
     .dchip button { padding: 4px 8px; }
     .tabs button { padding: 8px 16px; }
+    /* pins are drag handles and tap targets on touch */
+    .rpin { width: 42px; height: 42px; }
     .info { width: 20px; height: 20px; line-height: 18px; font-size: 12px; }
   }
 
@@ -529,6 +629,10 @@
     #optChamps { width: 100%; }
     .mirror-bar .toggle { flex: 1; }
     .mirror-bar .mfloor { flex-basis: 100%; max-width: none; margin-left: 0; }
+    /* the rift map is an iPad/desktop treat — pins would be sub-fingertip.
+       The card itself stays: it holds the draft inputs, and .echip chips
+       stand in for the map's enemy pins */
+    #riftCard .rift, #riftCard .rift-hint { display: none; }
     /* slots become compact rows so the whole comp fits one screen */
     .roles { grid-template-columns: 1fr; gap: var(--sp-2); }
     .slot {
@@ -757,8 +861,25 @@ function laneDist(cid, raw = false) {
     for (const r in own) dist[r] = missing * own[r] / ownTotal;
   }
   if (!raw) {
-    const claimed = new Set([...effEnemy()].filter(c => c !== cid).map(c => enemyRole.get(c)).filter(Boolean));
-    for (const r of claimed) delete dist[r];
+    // Lanes claimed by other enemy picks are off the table: manual chip
+    // assignments, plus champs whose own meta distribution is effectively
+    // single-lane (a 100%-top pick landing second means the earlier flex pick
+    // is NOT top — collapse and renormalize the survivors accordingly).
+    const claimed = new Set();
+    for (const c of effEnemy()) {
+      if (c === cid) continue;
+      const manual = enemyRole.get(c);
+      if (manual) { claimed.add(manual); continue; }
+      const rd = laneDist(c, true);
+      const keys = Object.keys(rd);
+      if (keys.length === 1 && rd[keys[0]] >= 0.85) claimed.add(keys[0]);
+    }
+    let removed = 0;
+    for (const r of Object.keys(dist)) if (claimed.has(r)) { removed += dist[r]; delete dist[r]; }
+    if (removed > 0) {
+      const rest = Object.values(dist).reduce((a, b) => a + b, 0);
+      if (rest) for (const r in dist) dist[r] /= rest;
+    }
   }
   return dist;
 }
@@ -817,6 +938,25 @@ function dAdj(cid, role) {
     adj += w * Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, edge));
   }
   return dAdjCache[k] = adj;
+}
+
+// Hard-counter flag: enemy picks likely in this lane (≥50% lane odds) that
+// beat the champ ≥55% of the time in the meta (20+ games). This never swaps
+// the pick by itself — the score card raises a Swap/Keep prompt and the champ
+// only leaves the optimizer's menu once the player opts into the swap
+// (counterAvoid); Keep dismisses the prompt for that champ+enemies combo.
+const HARD_COUNTER_WR = 0.55;
+let counterAvoid = new Set();      // cids the player agreed to draft around
+let counterDismissed = new Set();  // "cid|enemies" prompts the player declined
+function hardCounters(cid, role) {
+  if (!draftMode) return [];
+  const out = [];
+  for (const ecid of effEnemy()) {
+    if ((laneDist(ecid)[role] || 0) < 0.5) continue;
+    const rec = matchupRec(ecid, cid, role);
+    if (rec && rec.play >= 20 && rec.win / rec.play >= HARD_COUNTER_WR) out.push(ecid);
+  }
+  return out;
 }
 
 // indScore is draft-independent (and cached as such); slotScore adds the
@@ -947,13 +1087,14 @@ function candidates(riotId, role, n = 3) {
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
-    avail: !draftUnavailable(cid),
+    avail: !draftUnavailable(cid) && !counterAvoid.has(cid),
     played: ((pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
   }));
-  // The mastery floor, games range, and draft availability are hard filters —
-  // outside them a champ is simply not a pick for this player. Within them,
-  // prefer role-viable champs with a real game sample, degrading so the list
-  // stays useful.
+  // The mastery floor, games range, and draft availability (including champs
+  // the player agreed to draft around after a hard-counter flag) are hard
+  // filters — outside them a champ is simply not a pick for this player.
+  // Within them, prefer role-viable champs with a real game sample, degrading
+  // so the list stays useful.
   const eligible = scored.filter(c => c.mastered && c.inRange && c.avail);
   const tiers = [
     eligible.filter(c => c.viable && c.played),
@@ -1176,13 +1317,13 @@ function render() {
           <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
           <div class="breakdown" id="breakdown"></div>
         </div>
+        <div class="card" id="riftCard" hidden></div>
         ${PROFILES ? `<div class="card" id="profileCard">
           <h2>Team profile</h2>
           <div id="profile"></div>
         </div>` : ""}
       </div>
       <div>
-        <div class="card" id="draftCard" hidden style="margin-bottom:18px"></div>
         <div class="board-head">
           <button class="btn" id="optChamps">Optimize champs (keep roles)</button>
           <button class="btn" id="optFull" title="Full search over players, roles, and champions">Optimize comp</button>
@@ -1274,57 +1415,64 @@ function render() {
 }
 
 // --- draft card ------------------------------------------------------------
+// The draft tool IS the rift card: picks live on the map (enemy pins open a
+// lane/remove popover), bans sit in a compact strip below it, and the two
+// inputs stay for fast entry during a timed ban phase.
 function renderDraft() {
-  const el = $("#draftCard");
+  const el = $("#riftCard");
   if (!el) return;
   el.hidden = !draftMode;
   if (!draftMode) return;
-  const chip = (cid, kind) => {
-    const isLive = kind === "ban" ? liveBans.has(cid) : liveEnemy.has(cid);
-    const manual = kind === "ban" ? manualBans.has(cid) : manualEnemy.has(cid);
-    let roleSel = "";
-    if (kind === "enemy") {
-      const guess = Object.entries(laneDist(cid, true)).sort((a, b) => b[1] - a[1]);
-      const auto = guess.length
-        ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
-        : "lane?";
-      roleSel = `<select data-erole="${cid}" aria-label="${champName(cid)} lane" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
-        <option value="">${auto}</option>
-        ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
-      </select>`;
-    }
-    return `<span class="dchip dchip-${kind} ${isLive ? "live" : ""}" title="${isLive ? "from live sync" : ""}">
-      <img src="${champIcon(cid)}" alt="">${champName(cid)}${roleSel}
-      ${manual && !isLive ? `<button data-remove="${kind}:${cid}" title="remove">✕</button>` : ""}
+  const bans = [...effBans()], enemy = [...effEnemy()];
+  const banChip = cid => {
+    const live = liveBans.has(cid);
+    return `<span class="dchip dchip-ban bchip" title="${champName(cid)}${live ? " — from live sync" : ""}">
+      <img src="${champIcon(cid)}" alt="${champName(cid)}">
+      ${manualBans.has(cid) && !live ? `<button data-remove="ban:${cid}" aria-label="remove ban ${champName(cid)}">✕</button>` : ""}
     </span>`;
   };
-  const bans = [...effBans()], enemy = [...effEnemy()];
+  // phone fallback: the map is display:none there, so enemy picks keep their
+  // old chip UI (lane select + remove) — hidden wherever the map is visible
+  const echip = cid => {
+    const live = liveEnemy.has(cid);
+    const guess = Object.entries(enemyRole.get(cid) ? laneDist(cid, true) : laneDist(cid))
+      .sort((a, b) => b[1] - a[1]);
+    const auto = guess.length
+      ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
+      : "lane?";
+    return `<span class="dchip dchip-enemy echip ${live ? "live" : ""}">
+      <img src="${champIcon(cid)}" alt="">${champName(cid)}
+      <select data-erole="${cid}" aria-label="${champName(cid)} lane">
+        <option value="">${auto}</option>
+        ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
+      </select>
+      ${manualEnemy.has(cid) && !live ? `<button data-remove="enemy:${cid}" title="remove">✕</button>` : ""}
+    </span>`;
+  };
+  const anyGuess = enemy.length && [...enemyLaneMap().values()].some(a => !a.locked);
   el.innerHTML = `
-    <h2>Draft
+    <h2>Summoner's Rift
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
       ${manualBans.size || manualEnemy.size
         ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans and enemy picks">Clear</button>` : ""}
     </h2>
+    <div class="rift" id="riftMap"></div>
     <div class="draft-row">
       <span class="dlabel">Bans</span>
-      ${bans.map(c => chip(c, "ban")).join("")}
+      ${bans.map(banChip).join("")}
       <input class="dinput" id="banInput" list="champdl" aria-label="Add ban" placeholder="add ban…">
     </div>
     <div class="draft-row">
       <span class="dlabel">Enemy</span>
-      ${enemy.map(c => chip(c, "enemy")).join("")}
+      ${enemy.map(echip).join("")}
       <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
-    ${liveOurs.length ? `<div class="draft-row">
-      <span class="dlabel">Ours</span>
-      ${liveOurs.map(p => `<span class="dchip live" title="locked in the client">
-        <img src="${champIcon(p.championId)}" alt="">${champName(p.championId)}${ROLE_LABEL[p.position] ? `&nbsp;· ${ROLE_LABEL[p.position]}` : ""}
-      </span>`).join("")}
-    </div>` : ""}
+    <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Drag a blue pin onto another lane to swap roles — the board follows.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
     ${enemy.length && PROFILES
       ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs whoever might lane against them:</div>` + profileHTML(enemy)
       : `<div class="hint">Banned and enemy-picked champs drop out of candidates and the optimizer. Run <code>python3 lcu_bridge.py</code> next to the League client to sync this automatically.</div>`}
   `;
+  renderRift();
   updateLiveIndicator();
   const resolve = v => CHAMP_BY_NAME[v.trim().toLowerCase()] ?? null;
   // commit on change AND on Enter — during a timed ban phase the input has to
@@ -1351,6 +1499,8 @@ function renderDraft() {
   if (clr) clr.addEventListener("click", () => {
     manualBans.clear();
     manualEnemy.clear();
+    counterAvoid.clear();
+    counterDismissed.clear();
     for (const cid of [...enemyRole.keys()]) if (!liveEnemy.has(cid)) enemyRole.delete(cid);
     draftChanged();
   });
@@ -1359,7 +1509,8 @@ function renderDraft() {
     (kind === "ban" ? manualBans : manualEnemy).delete(+cid);
     draftChanged();
   }));
-  el.querySelectorAll("[data-erole]").forEach(s => s.addEventListener("change", e => {
+  // phone-fallback chip selects; the popover selects wire themselves
+  el.querySelectorAll(".echip [data-erole]").forEach(s => s.addEventListener("change", e => {
     const cid = +e.target.dataset.erole;
     enemyRole.set(cid, e.target.value || null);
     ensureEnemyCounters(cid);
@@ -1379,6 +1530,215 @@ function updateLiveIndicator() {
   } else { dot.className = "live-dot"; msg.textContent = "reconnecting — manual entry works"; }
 }
 
+// --- rift map --------------------------------------------------------------
+// Something to get hyped about while the draft unfolds: our comp standing on
+// the blue side of the Rift, theirs filling in on red. Enemy lanes come from
+// the chip lock when set, otherwise the same laneDist guesses the scorer
+// uses. Anchor coords are % of a 100×100 map, y down (blue base bottom-left).
+const RIFT_POS = {
+  ours:  { TOP: [10, 30], JUNGLE: [24, 48], MIDDLE: [38, 62], BOTTOM: [70, 90], UTILITY: [48, 90] },
+  enemy: { TOP: [30, 10], JUNGLE: [48, 24], MIDDLE: [62, 38], BOTTOM: [90, 70], UTILITY: [90, 48] },
+};
+
+// One lane per enemy pick: chip locks first, then a greedy pass over lane
+// weights (highest confidence claims its lane first), then any lane still
+// free for picks with no meta signal at all — every pick lands somewhere.
+function enemyLaneMap() {
+  const out = new Map(), taken = new Set();
+  const picks = [...effEnemy()];
+  for (const cid of picks) {
+    const r = enemyRole.get(cid);
+    if (r && !taken.has(r)) { out.set(cid, { role: r, locked: true }); taken.add(r); }
+  }
+  const rest = picks.filter(c => !out.has(c));
+  const scored = [];
+  for (const cid of rest)
+    for (const [r, w] of Object.entries(laneDist(cid))) scored.push({ cid, r, w });
+  scored.sort((a, b) => b.w - a.w);
+  for (const s of scored)
+    if (!out.has(s.cid) && !taken.has(s.r)) { out.set(s.cid, { role: s.r, w: s.w }); taken.add(s.r); }
+  for (const cid of rest) {
+    if (out.has(cid)) continue;
+    const free = ROLES.find(r => !taken.has(r));
+    if (!free) break;
+    out.set(cid, { role: free, w: 0 });
+    taken.add(free);
+  }
+  return out;
+}
+
+// Map only — renderDraft owns the card scaffold around it. Enemy pins are
+// buttons that open the lane/remove popover; empty enemy pins focus the
+// add-pick input.
+function renderRift() {
+  const m = $("#riftMap");
+  if (!m || !draftMode) return;
+  const enemyByRole = {};
+  for (const [cid, a] of enemyLaneMap()) enemyByRole[a.role] = { cid, ...a };
+  const pins = ROLES.map((role, i) => {
+    const s = slots[i];
+    const [ox, oy] = RIFT_POS.ours[role];
+    const who = s.player ? s.player.split("#")[0] : "";
+    const ourTip = `${s.champ ? champName(s.champ) + " · " : ""}${ROLE_LABEL[role]}${who ? " · " + who : ""}${s.player || s.champ ? " — drag to swap roles" : " — not picked yet"}`;
+    const our = s.champ
+      ? `<div class="rpin ours" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
+          <img src="${champIcon(s.champ)}" alt="">
+          <span class="rname">${champName(s.champ)}${who ? `<span class="rp">${who}</span>` : ""}</span>
+        </div>`
+      : `<div class="rpin rpin-empty ours" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
+          ${ROLE_ICON[role]}${who ? `<span class="rname"><span class="rp">${who}</span></span>` : ""}
+        </div>`;
+    const [ex, ey] = RIFT_POS.enemy[role];
+    const e = enemyByRole[role];
+    const guess = e && !e.locked;
+    const enemyPin = e
+      ? `<button type="button" class="rpin enemy${guess ? " guess" : ""}" data-ecid="${e.cid}" style="left:${ex}%;top:${ey}%"
+          data-tip="${champName(e.cid)} · ${ROLE_LABEL[role]}${e.locked ? "" : e.w ? ` (guess ${Math.round(e.w * 100)}%)` : " (guess)"}"
+          aria-label="${champName(e.cid)}, ${ROLE_LABEL[role]} — set lane or remove">
+          <img src="${champIcon(e.cid)}" alt="">
+          <span class="rname">${champName(e.cid)}</span>
+        </button>`
+      : `<button type="button" class="rpin rpin-empty enemy" data-add-enemy style="left:${ex}%;top:${ey}%"
+          data-tip="${ROLE_LABEL[role]} — add enemy pick" aria-label="add enemy pick">${ROLE_ICON[role]}</button>`;
+    return our + enemyPin;
+  }).join("");
+  m.innerHTML = `
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <rect x="1" y="1" width="98" height="98" rx="8" class="rf-ground"/>
+      <polygon points="1,1 1,99 99,99" class="rf-side ours"/>
+      <polygon points="1,1 99,1 99,99" class="rf-side enemy"/>
+      <line x1="17" y1="17" x2="83" y2="83" class="rf-river"/>
+      <circle cx="35" cy="35" r="3" class="rf-pit"/>
+      <circle cx="65" cy="65" r="3" class="rf-pit"/>
+      <path d="M 10 84 L 10 16 Q 10 10 16 10 L 84 10" class="rf-lane"/>
+      <path d="M 16 90 L 84 90 Q 90 90 90 84 L 90 16" class="rf-lane"/>
+      <path d="M 16 84 L 84 16" class="rf-lane"/>
+      <circle cx="9" cy="91" r="6" class="rf-base ours"/>
+      <circle cx="91" cy="9" r="6" class="rf-base enemy"/>
+    </svg>
+    ${pins}
+    <span class="rside ours">us</span>
+    <span class="rside enemy">them</span>`;
+  m.querySelectorAll("[data-ecid]").forEach(b =>
+    b.addEventListener("click", e => { e.stopPropagation(); openRiftPop(+b.dataset.ecid, b); }));
+  m.querySelectorAll("[data-add-enemy]").forEach(b =>
+    b.addEventListener("click", () => { const inp = $("#enemyInput"); if (inp) inp.focus(); }));
+  wireRiftDrag(m);
+}
+
+// Dragging a blue pin onto another lane anchor swaps the two slots wholesale
+// (player AND champ travel together) and the role board below follows.
+// Pointer events, not HTML5 drag — that API never fires on iPad touches.
+function wireRiftDrag(m) {
+  const anchors = ROLES.map(r => ({ r, x: RIFT_POS.ours[r][0], y: RIFT_POS.ours[r][1] }));
+  m.querySelectorAll("[data-drag-slot]").forEach(pin => {
+    pin.addEventListener("pointerdown", e => {
+      const src = +pin.dataset.dragSlot;
+      if (e.button || (!slots[src].player && !slots[src].champ)) return;
+      e.preventDefault();
+      // capture keeps a fast touch-drag glued to the pin; the listeners live
+      // on window regardless, so a failed capture only costs smoothness
+      try { pin.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      pin.classList.add("dragging");
+      const rect = m.getBoundingClientRect();
+      let target = null, moved = false;
+      const onMove = ev => {
+        if (ev.pointerId !== e.pointerId) return;
+        const x = (ev.clientX - rect.left) / rect.width * 100;
+        const y = (ev.clientY - rect.top) / rect.height * 100;
+        moved = true;
+        pin.style.left = x + "%";
+        pin.style.top = y + "%";
+        let best = null, bd = Infinity;
+        for (const a of anchors) {
+          const d = Math.hypot(a.x - x, a.y - y);
+          if (d < bd) { bd = d; best = a; }
+        }
+        target = bd <= 20 ? ROLES.indexOf(best.r) : null;
+        m.querySelectorAll(".drop-target").forEach(t => t.classList.remove("drop-target"));
+        if (target != null && target !== src) {
+          const t = m.querySelector(`[data-drag-slot="${target}"]`);
+          if (t) t.classList.add("drop-target");
+        }
+      };
+      const unbind = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onCancel);
+      };
+      // a cancelled gesture (OS grabbed the touch mid-drag) must never
+      // commit — only an explicit release over an anchor swaps roles
+      const onCancel = ev => {
+        if (ev.pointerId !== e.pointerId) return;
+        unbind();
+        renderRift();  // snap back
+      };
+      const onUp = ev => {
+        if (ev.pointerId !== e.pointerId) return;
+        unbind();
+        if (moved && target != null && target !== src) {
+          [slots[src], slots[target]] = [slots[target], slots[src]];
+          autoSwapNote = null;  // the user is steering again
+          rankedTabs.assigned = null;  // role assignment changed — stale
+          if (activeTab === "assigned") switchTab("assigned");
+          renderSlots(); renderScore();
+        } else {
+          renderRift();  // snap back
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onCancel);
+    });
+  });
+}
+
+// The old enemy chip's controls, relocated onto the pin: lane lock (with the
+// same "auto" distribution label) and removal for manually entered picks.
+function openRiftPop(cid, pinEl) {
+  const m = $("#riftMap");
+  if (!m) return;
+  const old = m.querySelector(".rift-pop");
+  if (old) old.remove();
+  // effective distribution (after other picks' lane claims) unless the
+  // user locked a lane — then the raw guess labels the "auto" option
+  const guess = Object.entries(enemyRole.get(cid) ? laneDist(cid, true) : laneDist(cid))
+    .sort((a, b) => b[1] - a[1]);
+  const auto = guess.length
+    ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
+    : "lane?";
+  const live = liveEnemy.has(cid);
+  const pop = document.createElement("div");
+  pop.className = "rift-pop";
+  // anchor at the pin, open toward the map's center so it never clips
+  const x = parseFloat(pinEl.style.left), y = parseFloat(pinEl.style.top);
+  pop.style.left = x + "%";
+  pop.style.top = y + "%";
+  pop.style.transform = `translate(${x > 50 ? "calc(-100% + 17px)" : "-17px"}, ${y > 50 ? "calc(-100% - 26px)" : "26px"})`;
+  pop.innerHTML = `
+    <b>${champName(cid)}${live ? ` <span class="rlive">live</span>` : ""}</b>
+    <select data-erole aria-label="${champName(cid)} lane" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
+      <option value="">${auto}</option>
+      ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
+    </select>
+    ${manualEnemy.has(cid) && !live ? `<button type="button" class="btn toggle" data-pop-remove>Remove pick</button>` : ""}`;
+  m.appendChild(pop);
+  pop.querySelector("[data-erole]").addEventListener("change", e => {
+    enemyRole.set(cid, e.target.value || null);
+    ensureEnemyCounters(cid);
+    draftChanged();
+  });
+  const rm = pop.querySelector("[data-pop-remove]");
+  if (rm) rm.addEventListener("click", () => {
+    manualEnemy.delete(cid);
+    draftChanged();
+  });
+  const close = ev => {
+    if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", close); }
+  };
+  setTimeout(() => document.addEventListener("click", close), 0);
+}
+
 // A slotted champ just got banned or enemy-picked: swap in the best still-
 // available candidate for that player+role instead of leaving a dead board.
 // Judged by full comp score when the board is complete (synergy counts), by
@@ -1388,7 +1748,8 @@ function autoReplaceDead() {
   const swaps = [];
   for (let i = 0; i < 5; i++) {
     const s = slots[i];
-    if (!s.player || !s.champ || !draftUnavailable(s.champ)) continue;
+    if (!s.player || !s.champ) continue;
+    if (!draftUnavailable(s.champ) && !counterAvoid.has(s.champ)) continue;
     const used = new Set(slots.map(x => x.champ));
     const cands = candidates(s.player, ROLES[i], 15).filter(c => !used.has(c));
     if (!cands.length) continue;
@@ -1437,14 +1798,19 @@ function autoOptimize(deadNames) {
 function draftChanged(rerenderCard = true) {
   dAdjCache = {};
   candCache = {};
-  const dead = slots.filter(s => s.champ && draftUnavailable(s.champ)).map(s => champName(s.champ));
+  const dead = slots.flatMap(s => {
+    if (!s.champ) return [];
+    if (draftUnavailable(s.champ)) return [champName(s.champ)];
+    if (counterAvoid.has(s.champ)) return [champName(s.champ) + " (hard-countered)"];
+    return [];
+  });
   const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall };
   rankedTabs.assigned = rankedTabs.overall = null;
   if (autoOptimize(dead)) {
     had.overall = true;  // fresh results are worth showing
   } else {
     const swaps = autoReplaceDead();
-    if (swaps) autoSwapNote = swaps.join(", ");
+    if (swaps) autoSwapNote = `auto-swapped ${swaps.join(", ")} — pick was banned, taken, or hard-countered`;
   }
   if (rerenderCard) renderDraft();
   renderSlots();
@@ -1458,6 +1824,7 @@ function applyLiveDraft(j) {
   liveBans = new Set(j.active ? j.bans || [] : []);
   liveEnemy = new Set(j.active ? j.enemy || [] : []);
   liveOurs = j.active ? j.ours || [] : [];
+  if (!j.active) { counterAvoid.clear(); counterDismissed.clear(); }  // per-draft decisions
   for (const cid of liveEnemy) ensureEnemyCounters(cid);
   // Reflect our own locked picks on the board: fill the matching role's champ,
   // but never clobber a champ the user chose themselves — only empty slots and
@@ -1628,6 +1995,11 @@ function renderSlots() {
           stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
         if (draftUnavailable(s.champ))
           stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!" : "enemy took it!"}</span>`;
+        else {
+          const hc = hardCounters(s.champ, role);
+          if (hc.length)
+            stat += `<br><span class="banned-note">hard-countered by ${hc.map(champName).join(", ")}!</span>`;
+        }
         // surface the matchups the score silently includes — the meta win rate
         // of this champ against each enemy pick that might lane here, with the
         // lane odds shown when the enemy pick is flexible
@@ -1680,6 +2052,8 @@ function renderSlots() {
     if (activeTab === "assigned") switchTab("assigned");
     renderSlots(); renderScore();
   }));
+  // the map mirrors the board — slot edits reach here without renderDraft
+  renderRift();
 }
 
 function renderScore() {
@@ -1709,9 +2083,23 @@ function renderScore() {
   verdictEl.textContent = v.label;
   verdictEl.className = "verdict" + (v.cls ? " " + v.cls : "");
   const synCls = sc.syn >= 0 ? "pos" : "neg";
+  // Hard-counter prompts: flag the matchup and let the player decide — never
+  // swap their pick out from under them over a counter alone.
+  const flagged = assign.flatMap(a => {
+    if (counterAvoid.has(a.champ)) return [];
+    const hc = hardCounters(a.champ, a.role);
+    const key = a.champ + "|" + hc.join(",");
+    if (!hc.length || counterDismissed.has(key)) return [];
+    return [{ cid: a.champ, key, names: hc.map(champName).join(", ") }];
+  });
   $("#breakdown").innerHTML =
+    flagged.map(f => `<div class="counter-flag">
+      <span class="banned-note">${champName(f.cid)} is hard-countered by ${f.names}</span>
+      <button class="btn toggle" data-cswap="${f.cid}">Swap it</button>
+      <button class="btn toggle" data-ckeep="${f.key}">Keep</button>
+    </div>`).join("") +
     (autoSwapNote
-      ? `<b style="color:var(--warning)">auto-swapped ${autoSwapNote}</b> — pick was banned or taken<br>`
+      ? `<b style="color:var(--warning)">${autoSwapNote}</b><br>`
       : "") +
     `Individual baseline: <b>${pct(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
     `Average of the five slot scores: each player's win rate on their champion in that role ` +
@@ -1729,6 +2117,15 @@ function renderScore() {
     `these two champions themselves count. Green: this group overperforms together. Red: you ` +
     `win less together than your individual stats predict. Caveat: pair and individual records ` +
     `come from the same games, so hot streaks inflate both.</span></span>`;
+  document.querySelectorAll("[data-cswap]").forEach(b => b.addEventListener("click", () => {
+    counterAvoid.add(+b.dataset.cswap);
+    candCache = {};
+    draftChanged(false);
+  }));
+  document.querySelectorAll("[data-ckeep]").forEach(b => b.addEventListener("click", () => {
+    counterDismissed.add(b.dataset.ckeep);
+    renderScore();
+  }));
 }
 
 // Advisory read on the comp's shape — damage mix, frontline, crowd control —
