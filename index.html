@@ -544,6 +544,12 @@
     display: block; font-weight: 500; font-size: 9px; line-height: 11px;
     color: var(--text-secondary); text-align: center;
   }
+  /* support labels sit above their pin — bot lane pairs share a row, and on
+     narrow screens two below-pin labels would collide */
+  .rpin.rsup .rname { top: auto; bottom: calc(100% + 3px); }
+  /* SE-class screens: champ-only labels, the two-line pills chain-collide
+     down the jungle diagonal at ~270px map width */
+  @media (max-width: 360px) { .rname .rp { display: none; } }
   /* team labels sit on the fountains */
   .rside {
     position: absolute; transform: translate(-50%, -50%);
@@ -563,9 +569,6 @@
   .rlive { color: var(--positive); font-size: 11px; font-weight: 500; }
   .bchip { padding: 3px; }
   .bchip img { width: 24px; height: 24px; border-radius: 6px; }
-  /* compact enemy chips are the phone fallback — everywhere else the map
-     (hidden on phones) owns enemy management via its pins */
-  @media (min-width: 601px) { .echip { display: none; } }
 
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
@@ -604,7 +607,7 @@
     .dchip button { padding: 4px 8px; }
     .tabs button { padding: 8px 16px; }
     /* pins are drag handles and tap targets on touch */
-    .rpin { width: 42px; height: 42px; }
+    .rpin { width: 44px; height: 44px; }
     .info { width: 20px; height: 20px; line-height: 18px; font-size: 12px; }
   }
 
@@ -629,10 +632,9 @@
     #optChamps { width: 100%; }
     .mirror-bar .toggle { flex: 1; }
     .mirror-bar .mfloor { flex-basis: 100%; max-width: none; margin-left: 0; }
-    /* the rift map is an iPad/desktop treat — pins would be sub-fingertip.
-       The card itself stays: it holds the draft inputs, and .echip chips
-       stand in for the map's enemy pins */
-    #riftCard .rift, #riftCard .rift-hint { display: none; }
+    /* the rift map renders on phones too — at this width it's the same
+       ~330px it gets in the desktop column, and coarse-pointer pins are
+       full 44px touch targets */
     /* slots become compact rows so the whole comp fits one screen */
     .roles { grid-template-columns: 1fr; gap: var(--sp-2); }
     .slot {
@@ -1431,24 +1433,6 @@ function renderDraft() {
       ${manualBans.has(cid) && !live ? `<button data-remove="ban:${cid}" aria-label="remove ban ${champName(cid)}">✕</button>` : ""}
     </span>`;
   };
-  // phone fallback: the map is display:none there, so enemy picks keep their
-  // old chip UI (lane select + remove) — hidden wherever the map is visible
-  const echip = cid => {
-    const live = liveEnemy.has(cid);
-    const guess = Object.entries(enemyRole.get(cid) ? laneDist(cid, true) : laneDist(cid))
-      .sort((a, b) => b[1] - a[1]);
-    const auto = guess.length
-      ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
-      : "lane?";
-    return `<span class="dchip dchip-enemy echip ${live ? "live" : ""}">
-      <img src="${champIcon(cid)}" alt="">${champName(cid)}
-      <select data-erole="${cid}" aria-label="${champName(cid)} lane">
-        <option value="">${auto}</option>
-        ${ROLES.map(r => `<option value="${r}" ${enemyRole.get(cid) === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}
-      </select>
-      ${manualEnemy.has(cid) && !live ? `<button data-remove="enemy:${cid}" title="remove">✕</button>` : ""}
-    </span>`;
-  };
   const anyGuess = enemy.length && [...enemyLaneMap().values()].some(a => !a.locked);
   el.innerHTML = `
     <h2>Summoner's Rift
@@ -1464,7 +1448,6 @@ function renderDraft() {
     </div>
     <div class="draft-row">
       <span class="dlabel">Enemy</span>
-      ${enemy.map(echip).join("")}
       <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
     <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Drag a blue pin onto another lane to swap roles — the board follows.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
@@ -1509,13 +1492,6 @@ function renderDraft() {
     (kind === "ban" ? manualBans : manualEnemy).delete(+cid);
     draftChanged();
   }));
-  // phone-fallback chip selects; the popover selects wire themselves
-  el.querySelectorAll(".echip [data-erole]").forEach(s => s.addEventListener("change", e => {
-    const cid = +e.target.dataset.erole;
-    enemyRole.set(cid, e.target.value || null);
-    ensureEnemyCounters(cid);
-    draftChanged();
-  }));
 }
 
 function updateLiveIndicator() {
@@ -1536,8 +1512,8 @@ function updateLiveIndicator() {
 // the chip lock when set, otherwise the same laneDist guesses the scorer
 // uses. Anchor coords are % of a 100×100 map, y down (blue base bottom-left).
 const RIFT_POS = {
-  ours:  { TOP: [10, 30], JUNGLE: [24, 48], MIDDLE: [38, 62], BOTTOM: [70, 90], UTILITY: [48, 90] },
-  enemy: { TOP: [30, 10], JUNGLE: [48, 24], MIDDLE: [62, 38], BOTTOM: [90, 70], UTILITY: [90, 48] },
+  ours:  { TOP: [10, 26], JUNGLE: [24, 44], MIDDLE: [38, 62], BOTTOM: [70, 90], UTILITY: [48, 90] },
+  enemy: { TOP: [26, 10], JUNGLE: [44, 24], MIDDLE: [62, 38], BOTTOM: [90, 70], UTILITY: [90, 48] },
 };
 
 // One lane per enemy pick: chip locks first, then a greedy pass over lane
@@ -1579,20 +1555,21 @@ function renderRift() {
     const s = slots[i];
     const [ox, oy] = RIFT_POS.ours[role];
     const who = s.player ? s.player.split("#")[0] : "";
+    const sup = role === "UTILITY" ? " rsup" : "";
     const ourTip = `${s.champ ? champName(s.champ) + " · " : ""}${ROLE_LABEL[role]}${who ? " · " + who : ""}${s.player || s.champ ? " — drag to swap roles" : " — not picked yet"}`;
     const our = s.champ
-      ? `<div class="rpin ours" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
+      ? `<div class="rpin ours${sup}" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
           <img src="${champIcon(s.champ)}" alt="">
           <span class="rname">${champName(s.champ)}${who ? `<span class="rp">${who}</span>` : ""}</span>
         </div>`
-      : `<div class="rpin rpin-empty ours" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
+      : `<div class="rpin rpin-empty ours${sup}" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
           ${ROLE_ICON[role]}${who ? `<span class="rname"><span class="rp">${who}</span></span>` : ""}
         </div>`;
     const [ex, ey] = RIFT_POS.enemy[role];
     const e = enemyByRole[role];
     const guess = e && !e.locked;
     const enemyPin = e
-      ? `<button type="button" class="rpin enemy${guess ? " guess" : ""}" data-ecid="${e.cid}" style="left:${ex}%;top:${ey}%"
+      ? `<button type="button" class="rpin enemy${guess ? " guess" : ""}${sup}" data-ecid="${e.cid}" style="left:${ex}%;top:${ey}%"
           data-tip="${champName(e.cid)} · ${ROLE_LABEL[role]}${e.locked ? "" : e.w ? ` (guess ${Math.round(e.w * 100)}%)` : " (guess)"}"
           aria-label="${champName(e.cid)}, ${ROLE_LABEL[role]} — set lane or remove">
           <img src="${champIcon(e.cid)}" alt="">
