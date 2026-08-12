@@ -28,10 +28,37 @@ REGION_OF = {
 
 
 class Riot:
-    def __init__(self, api_key: str, platform: str):
+    # The old code slept a flat 1.3s after every call to stay under the dev
+    # key's 100 req / 2 min. That constant, not Riot, decided how long a
+    # backfill took — and it stays wrong either way once the key tier changes.
+    # Instead, pace off X-App-Rate-Limit, which every response carries: a dev
+    # key reports "100:120,20:1" and a personal key reports something far
+    # roomier, so the same script runs correctly on both.
+    def __init__(self, api_key: str, platform: str, rps: float = 0):
         self.key = api_key
         self.platform = platform
         self.region = REGION_OF[platform]
+        self.min_interval = 1.0 / rps if rps else 1.3  # until the first header
+        self.pinned = bool(rps)  # explicit config setting wins over the header
+        self.last_call = 0.0
+
+    def _pace(self, headers):
+        """Slowest bucket in X-App-Rate-Limit ("100:120,20:1") sets the gap."""
+        if self.pinned:
+            return
+        raw = headers.get("X-App-Rate-Limit")
+        if not raw:
+            return
+        gaps = []
+        for bucket in raw.split(","):
+            count, _, secs = bucket.partition(":")
+            try:
+                gaps.append(float(secs) / float(count))
+            except ValueError:
+                continue
+        if gaps:
+            # 5% of headroom: bursting right at the limit trips 429s anyway
+            self.min_interval = max(gaps) * 1.05
 
     def get(self, host: str, path: str):
         url = f"https://{host}.api.riotgames.com{path}"
@@ -40,18 +67,30 @@ class Riot:
             "X-Riot-Token": self.key,
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
         })
-        for attempt in range(6):
+        attempt, waits = 0, 0
+        while attempt < 6 and waits < 40:
             try:
+                gap = self.min_interval - (time.time() - self.last_call)
+                if gap > 0:
+                    time.sleep(gap)
+                self.last_call = time.time()
                 with urllib.request.urlopen(req) as resp:
-                    time.sleep(1.3)  # stay under the dev-key 100 req / 2 min limit
+                    self._pace(resp.headers)
                     return json.load(resp)
             except urllib.error.HTTPError as e:
                 if e.code == 429:
+                    # A 429 is a pacing problem, not a failing request — it
+                    # must not eat the retry budget, or a long backfill dies
+                    # partway through on a healthy key.
+                    self._pace(e.headers)
                     wait = int(e.headers.get("Retry-After", "10"))
-                    print(f"  rate limited, sleeping {wait}s...")
+                    print(f"  rate limited, sleeping {wait}s...", flush=True)
                     time.sleep(wait + 1)
-                elif e.code in (500, 502, 503, 504):
+                    waits += 1
+                    continue
+                if e.code in (500, 502, 503, 504):
                     time.sleep(2 ** attempt)
+                    attempt += 1
                 else:
                     raise
         raise RuntimeError(f"giving up on {url}")
@@ -66,10 +105,15 @@ class Riot:
     def summoner(self, puuid: str):
         return self.get(self.platform, f"/lol/summoner/v4/summoners/by-puuid/{puuid}")
 
-    def match_ids(self, puuid: str, count: int, queue):
+    def match_ids(self, puuid: str, count: int, queue, start_time: int = 0):
         # queue: int = a single queue id (420 solo, 440 flex); "ranked" = both.
         # The endpoint returns at most 100 ids per call, so page through.
+        # start_time (epoch seconds) lets Riot do the age filtering, so `count`
+        # stops being the thing that decides how far back the window reaches —
+        # it is just a runaway guard now.
         q = "&type=ranked" if queue == "ranked" else f"&queue={queue}" if queue else ""
+        if start_time:
+            q += f"&startTime={int(start_time)}"
         ids = []
         for start in range(0, count, 100):
             n = min(100, count - start)
@@ -79,6 +123,10 @@ class Riot:
             if len(page) < n:  # ran out of history
                 break
         return ids
+
+    def league(self, puuid: str):
+        """Ranked entries (one per queue). Unranked players come back as []."""
+        return self.get(self.platform, f"/lol/league/v4/entries/by-puuid/{puuid}")
 
     def match(self, match_id: str):
         cached = MATCH_CACHE / f"{match_id}.json"
@@ -99,6 +147,67 @@ def ddragon_champions():
     return version, {int(c["key"]): {"slug": c["id"], "name": c["name"]} for c in raw.values()}
 
 
+# --- rank ------------------------------------------------------------------
+# Tier drives which slice of the ladder the meta prior is read from: a
+# champion's win rate in Emerald is not its win rate in Bronze, and the tool
+# was previously scoring everyone against the all-ranks average.
+QUEUE_OF = {"RANKED_SOLO_5x5": 420, "RANKED_FLEX_SR": 440}
+TIER_ORDER = ["IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD",
+              "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER"]
+DIVISION_ORDER = ["IV", "III", "II", "I"]
+
+
+def league_entries(riot: "Riot", puuid: str):
+    """{queueId: {tier, division, lp, wins, losses}} — {} when fully unranked."""
+    out = {}
+    for e in riot.league(puuid) or []:
+        qid = QUEUE_OF.get(e.get("queueType"))
+        if not qid:
+            continue
+        out[str(qid)] = {
+            "tier": e.get("tier"),
+            "division": e.get("rank"),
+            "lp": e.get("leaguePoints", 0),
+            "wins": e.get("wins", 0),
+            "losses": e.get("losses", 0),
+        }
+    return out
+
+
+def rank_label(ranks, queue_pref=("420", "440")):
+    for q in queue_pref:
+        r = ranks.get(q)
+        if r and r.get("tier"):
+            apex = r["tier"] in ("MASTER", "GRANDMASTER", "CHALLENGER")
+            div = "" if apex else f" {r['division']}"
+            return f"{r['tier'].title()}{div} {r['lp']}LP"
+    return ""
+
+
+def rank_score(r):
+    """Sortable ladder position, so a group median can be taken."""
+    if not r or not r.get("tier"):
+        return None
+    t = TIER_ORDER.index(r["tier"]) if r["tier"] in TIER_ORDER else 0
+    d = DIVISION_ORDER.index(r["division"]) if r.get("division") in DIVISION_ORDER else 3
+    return t * 4 + d
+
+
+def group_tier(players, queue_pref=("420", "440")):
+    """Median tier of the ranked members — the ladder slice to read meta from."""
+    scores = []
+    for p in players:
+        for q in queue_pref:
+            s = rank_score((p.get("ranks") or {}).get(q))
+            if s is not None:
+                scores.append(s)
+                break
+    if not scores:
+        return None
+    scores.sort()
+    return TIER_ORDER[scores[len(scores) // 2] // 4]
+
+
 def main():
     cfg_path = ROOT / "config.json"
     if not cfg_path.exists():
@@ -107,7 +216,9 @@ def main():
     DATA.mkdir(exist_ok=True)
     MATCH_CACHE.mkdir(exist_ok=True)
 
-    riot = Riot(cfg["api_key"], cfg["platform"])
+    riot = Riot(cfg["api_key"], cfg["platform"], cfg.get("requests_per_second", 0))
+    max_age_days = cfg.get("max_match_age_days", 365)
+    window_start = int(time.time() - max_age_days * 86400) if max_age_days else 0
     print("Fetching Data Dragon champion list...")
     dd_version, champs = ddragon_champions()
 
@@ -135,14 +246,20 @@ def main():
         summoner = riot.summoner(puuid)
         print(f"  mastery...")
         mastery = riot.mastery(puuid)
+        print(f"  rank...")
+        ranks = league_entries(riot, puuid)
         print(f"  match ids...")
-        ids = riot.match_ids(puuid, cfg.get("matches_per_player", 60), cfg.get("queue"))
+        ids = riot.match_ids(puuid, cfg.get("matches_per_player", 1000),
+                             cfg.get("queue"), window_start)
+        print(f"    {len(ids)} in the last {max_age_days}d"
+              f"{' — ' + rank_label(ranks) if ranks else ' — unranked'}")
         all_match_ids.update(ids)
         players.append({
             "riotId": riot_id,
             "puuid": puuid,
             "puuidHistory": history,
             "profileIconId": summoner.get("profileIconId"),
+            "ranks": ranks,
             "mastery": [
                 {"championId": m["championId"], "level": m["championLevel"], "points": m["championPoints"]}
                 for m in mastery
@@ -251,6 +368,7 @@ def main():
     out = {
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "ddragonVersion": dd_version,
+        "groupTier": group_tier(players),
         "champions": {str(k): v for k, v in champs.items()},
         "players": players,
         "playerPairs": [
@@ -268,7 +386,8 @@ def main():
         ],
     }
     (DATA / "players.json").write_text(json.dumps(out))
-    print(f"Wrote data/players.json ({len(players)} players, {len(matches)} matches).")
+    print(f"Wrote data/players.json ({len(players)} players, {len(matches)} matches, "
+          f"group tier {out['groupTier'] or 'unranked'}).")
 
     import compute_profiles
     compute_profiles.main()

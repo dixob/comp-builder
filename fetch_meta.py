@@ -16,10 +16,27 @@ OPGG_REGION = {"na1": "na", "euw1": "euw", "eun1": "eune", "kr": "kr", "br1": "b
                "jp1": "jp", "oc1": "oce", "tr1": "tr", "ru": "ru", "la1": "lan", "la2": "las"}
 
 
+def group_tier():
+    """Median rank of the group, written by fetch_data.py. A champion's win
+    rate in Emerald is not its win rate in Bronze, so the prior every pick is
+    shrunk toward should come from the slice of the ladder these players are
+    actually in — not the all-ranks average."""
+    players = ROOT / "data" / "players.json"
+    if not players.exists():
+        return None
+    return json.loads(players.read_text()).get("groupTier")
+
+
 def main():
     cfg = json.loads((ROOT / "config.json").read_text())
     region = OPGG_REGION.get(cfg["platform"], "na")
+    # config wins, then the group's median rank. With neither, send no tier at
+    # all: OP.GG's default slice is not the same as tier=all (2.1M games vs
+    # 10.7M), so defaulting to "all" would quietly move every prior.
+    tier = (cfg.get("meta_tier") or group_tier() or "").lower()
     url = f"https://lol-api-champion.op.gg/api/{region}/champions/ranked"
+    if tier:
+        url += f"?tier={tier}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req) as r:
         raw = json.load(r)
@@ -48,6 +65,7 @@ def main():
     out = {
         "patch": raw["meta"]["version"],
         "region": region,
+        "tier": tier,
         "matchCount": raw["meta"].get("match_count"),
         "analyzedAt": raw["meta"].get("analyzed_at"),
         "champions": champs,
@@ -55,7 +73,7 @@ def main():
     (ROOT / "data").mkdir(exist_ok=True)
     (ROOT / "data" / "meta.json").write_text(json.dumps(out))
     print(f"Wrote data/meta.json — patch {out['patch']}, {len(champs)} champions, "
-          f"{out['matchCount']:,} matches ({region})")
+          f"{out['matchCount']:,} matches ({region}, {tier})")
 
 
 if __name__ == "__main__":
