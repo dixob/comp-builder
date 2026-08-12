@@ -176,6 +176,8 @@
   .player .name { display: block; font-size: 14px; font-weight: 600;
                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .player .tag { display: block; font-size: 11px; line-height: 16px; color: var(--text-muted); }
+  .player .rank { color: var(--text-secondary); font-weight: 600; }
+  .player .rank::before { content: "·"; margin: 0 4px; color: var(--text-muted); font-weight: 400; }
   .qsplit { flex: none; text-align: right; font-size: 11px; line-height: 16px; color: var(--text-secondary); white-space: nowrap; }
   .qsplit .q { color: var(--text-muted); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; }
 
@@ -1262,6 +1264,25 @@ function avatar(riotId) {
   return `<img class="avatar" src="${url}" alt="">`;
 }
 
+// Ranked tier from league-v4. The flex-only toggle scores flex games, so it
+// shows the flex rank — otherwise solo is the headline and flex is the
+// fallback for someone who only queues flex.
+const TIER_SHORT = { IRON: "I", BRONZE: "B", SILVER: "S", GOLD: "G", PLATINUM: "P",
+  EMERALD: "E", DIAMOND: "D", MASTER: "M", GRANDMASTER: "GM", CHALLENGER: "C" };
+const APEX = new Set(["MASTER", "GRANDMASTER", "CHALLENGER"]);
+function rankLabel(p) {
+  const order = flexOnly ? ["440", "420"] : ["420", "440"];
+  for (const q of order) {
+    const r = (p.ranks || {})[q];
+    if (!r || !r.tier) continue;
+    const short = TIER_SHORT[r.tier] || r.tier[0];
+    const badge = APEX.has(r.tier) ? `${short}${r.lp}` : `${short}${r.division || ""}`;
+    const full = `${r.tier[0] + r.tier.slice(1).toLowerCase()}${APEX.has(r.tier) ? "" : " " + r.division} · ${r.lp} LP`;
+    return `<span class="rank" title="${q === "420" ? "Solo/duo" : "Flex"} — ${full}">${badge}</span>`;
+  }
+  return "";
+}
+
 const ROLE_ICON = {
   TOP: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h13l-4.5 4.5h-4v4L3 16z"/><path opacity=".35" d="M21 21H8l4.5-4.5h4v-4L21 8z"/></svg>`,
   JUNGLE: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7 2c3 3.5 4.4 7.5 4.6 11.5.8-2.3 2.2-4.2 4.4-5.5-1.5 2.6-2.3 5.7-2.3 9L12 21l-1.7-2.5C9.5 13 8.8 7 7 2z"/><path opacity=".55" d="M17.5 4c-1.2 2.2-1.9 4.6-2.1 7.1 1-1.2 2.3-2 3.9-2.4-1.1 1.6-1.8 3.4-2 5.4-.6-3.6-.5-7 .2-10.1z"/></svg>`,
@@ -1333,7 +1354,7 @@ function render() {
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}<span data-notes="${p.riotId}">${playerNotes(p)}</span></span></span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}${rankLabel(p)}<span data-notes="${p.riotId}">${playerNotes(p)}</span></span></span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
@@ -1537,8 +1558,16 @@ function updateLiveIndicator() {
   const dot = $("#liveDot"), msg = $("#liveMsg");
   if (!dot) return;
   const wsUp = draftWS && draftWS.readyState === WebSocket.OPEN;
+  // The bridge heartbeats every 25s during champ select, so an active draft
+  // with an old timestamp means the bridge stopped — the socket being up says
+  // nothing about whether anyone is still feeding it.
+  const fresh = Date.now() - (liveDraft.ts || 0) < 80e3;
+  const from = liveDraft.owner ? `live from ${liveDraft.owner}` : "live from client";
   if (!liveMode) { dot.className = "live-dot"; msg.textContent = "manual entry (no live worker)"; }
-  else if (wsUp && liveDraft.active) { dot.className = "live-dot on"; msg.textContent = "live from client"; }
+  else if (wsUp && liveDraft.active && fresh) { dot.className = "live-dot on"; msg.textContent = from; }
+  else if (wsUp && liveDraft.active) {
+    dot.className = "live-dot"; msg.textContent = "bridge stopped — picks may be stale";
+  }
   else if (wsUp) { dot.className = "live-dot on"; msg.textContent = "connected — no champ select"; }
   else if (liveDraft.active && Date.now() - liveDraft.ts < 70e3) {
     dot.className = "live-dot"; msg.textContent = "live (reconnecting…)";
@@ -1868,7 +1897,7 @@ function applyLiveDraft(j) {
 // the current state on connect and pushes every bridge update instantly.
 // While the socket is down we fall back to polling so drafts stay usable.
 let draftWS = null, draftWSTimer = null, draftBackoff = 1000;
-let draftPingTimer = null, draftPollTimer = null;
+let draftPingTimer = null, draftPollTimer = null, liveTickTimer = null;
 
 async function pollDraft() {
   try { applyLiveDraft(await fetch(WORKER_URL + "/draft").then(r => r.json())); }
@@ -1907,9 +1936,30 @@ function setDraftLive(on) {
   clearTimeout(draftWSTimer);
   clearInterval(draftPollTimer); draftPollTimer = null;
   clearInterval(draftPingTimer);
+  clearInterval(liveTickTimer); liveTickTimer = null;
   if (draftWS) { const ws = draftWS; draftWS = null; ws.close(); }
-  if (on && liveMode) connectDraftWS();
+  if (on && liveMode) {
+    connectDraftWS();
+    // Nothing arrives when a bridge dies, so the indicator needs its own tick
+    // to notice the draft has gone stale.
+    liveTickTimer = setInterval(updateLiveIndicator, 10000);
+  }
 }
+
+// iPads are the main way people watch a draft they aren't piloting, and iOS
+// suspends a backgrounded tab: the socket dies silently and the reconnect
+// backoff can leave the page up to 15s stale after the screen wakes. Waking
+// is a certainty here (the draft is the reason they picked the tab back up),
+// so re-read the draft immediately and rebuild the socket if it's gone.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !draftMode || !liveMode) return;
+  pollDraft();
+  if (!draftWS || draftWS.readyState > WebSocket.OPEN) {
+    clearTimeout(draftWSTimer);
+    draftBackoff = 1000;
+    connectDraftWS();
+  }
+});
 
 // Slotting a player is an implicit opt-in: re-check them in the squad list
 // and refresh anything that depends on the player pool.
@@ -2410,7 +2460,8 @@ function applyData(players, meta, profiles) {
 function renderChips() {
   const chips = [
     `patch <b>${D.ddragonVersion}</b>`,
-    META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games` : `no meta data`,
+    META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games`
+         + (META.tier && META.tier !== "all" ? ` · <b>${META.tier}</b>` : "") : `no meta data`,
     liveMode ? `refreshed <b>${refreshedAt(D.generatedAt)}</b>` : `fetched ${D.generatedAt.slice(0, 10)}`,
   ];
   if (flexOnly) chips.push(`<b>flex games only</b>`);

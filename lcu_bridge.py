@@ -17,6 +17,7 @@ run locally — the web page cannot reach the client directly.
 import base64
 import http.client
 import json
+import socket
 import ssl
 import sys
 import time
@@ -37,6 +38,10 @@ LOCKFILE_CANDIDATES = [
 # LCU event subscription would buy without adding a dependency.
 POLL_S = 0.5        # champ-select poll cadence
 SESSION_WAIT_S = 3  # cadence while waiting for a champ select to start
+# Posts only go out when the draft changes, so a quiet stretch is
+# indistinguishable from a bridge that died. Re-post unchanged state on this
+# cadence to give the page a heartbeat it can age out.
+HEARTBEAT_S = 25
 
 # The client's TLS cert is self-signed — that's expected for the LCU API.
 SSL_CTX = ssl.create_default_context()
@@ -84,6 +89,13 @@ class LCU:
                 self.conn = None
 
 
+def bridge_id():
+    """Which machine is feeding the draft. Two people running the bridge from
+    different lobbies would otherwise overwrite each other's state in the
+    worker, last POST wins; the worker uses this to keep one owner per draft."""
+    return socket.gethostname()
+
+
 def extract_draft(session):
     """Bans + both teams' picks from a champ-select session payload."""
     bans, enemy, ours = set(), set(), []
@@ -116,8 +128,13 @@ def post_draft(worker_url, token, payload):
         data=json.dumps(payload).encode(),
         headers={"content-type": "application/json", "x-admin-token": token},
         method="POST")
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:  # another bridge owns the live draft
+            return json.load(e)
+        raise
 
 
 def main():
@@ -136,8 +153,11 @@ def main():
     lcu = LCU(port, password)
     print(f"Connected to League client on port {port}. Waiting for champ select...")
 
+    me = bridge_id()
     last_sent = None
+    last_post = 0.0
     in_session = False
+    yielded = False  # another bridge owns this draft; stay quiet until it ends
     while True:
         try:
             session = lcu.get("/lol-champ-select/v1/session")
@@ -145,18 +165,34 @@ def main():
             if not in_session:
                 print("Champ select started.")
                 in_session = True
-            if payload != last_sent:
-                post_draft(worker_url, token, payload)
-                last_sent = payload
-                print(f"  synced: {len(payload['bans'])} bans, "
-                      f"{len(payload['enemy'])} enemy picks, {len(payload['ours'])} ours")
+                yielded = False
+            payload["owner"] = me
+            # While another bridge owns the draft this keeps retrying quietly
+            # on the heartbeat, so if that bridge dies mid-draft this one takes
+            # over as soon as the worker lets go of the stale owner.
+            if payload != last_sent or time.time() - last_post > HEARTBEAT_S:
+                res = post_draft(worker_url, token, payload)
+                last_sent, last_post = payload, time.time()
+                if res.get("ignored"):
+                    if not yielded:
+                        print(f"  {res.get('owner')} is already feeding a draft — "
+                              f"staying out of the way unless it stops.")
+                    yielded = True
+                else:
+                    if yielded:
+                        print("  took over the draft feed.")
+                    yielded = False
+                    print(f"  synced: {len(payload['bans'])} bans, "
+                          f"{len(payload['enemy'])} enemy picks, {len(payload['ours'])} ours")
             time.sleep(POLL_S)
         except LookupError:  # 404 — not in champ select
             if in_session:
                 print("Champ select ended.")
-                post_draft(worker_url, token, {"active": False})
+                if not yielded:
+                    post_draft(worker_url, token, {"active": False, "owner": me})
                 in_session = False
                 last_sent = None
+                last_post = 0.0
             time.sleep(SESSION_WAIT_S)
         except RuntimeError as e:
             print(f"{e}, retrying...")

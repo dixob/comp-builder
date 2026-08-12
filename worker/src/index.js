@@ -262,6 +262,9 @@ async function refresh(env) {
 // --- draft + counters -----------------------------------------------------
 
 const COUNTERS_TTL = 24 * 60 * 60;  // matchup stats move slowly
+// The bridge heartbeats every 25s while in champ select, so three missed
+// beats means it is gone, not merely quiet.
+const OWNER_TTL_MS = 80 * 1000;
 
 // The live draft lives in ONE Durable Object instance instead of KV: KV
 // replicates lazily (reads can lag writes by ~60s across colos), a DO is a
@@ -286,6 +289,15 @@ export class DraftHub {
     }
     if (req.method === "POST") {  // auth already checked by the worker
       const draft = await req.json();
+      // One bridge owns a live draft at a time. Several people leaving
+      // lcu_bridge.py running is the normal case, and without this the page
+      // flips between two unrelated lobbies on whichever POST landed last.
+      // Ownership lapses once the owner posts {active:false} or stops
+      // heartbeating, so a bridge dying mid-draft doesn't wedge the hub.
+      const prev = JSON.parse((await this.ctx.storage.get("draft")) || "{}");
+      const held = prev.active && prev.owner && Date.now() - (prev.ts || 0) < OWNER_TTL_MS;
+      if (held && draft.owner && draft.owner !== prev.owner)
+        return json({ ignored: true, owner: prev.owner }, 409);
       draft.ts = Date.now();
       const body = JSON.stringify(draft);
       await this.ctx.storage.put("draft", body);
