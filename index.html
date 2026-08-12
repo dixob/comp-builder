@@ -305,6 +305,18 @@
     padding: var(--sp-3); text-align: center;
   }
   .slot.filled { box-shadow: inset 3px 0 0 var(--accent); }
+  /* a locked slot: the inset bar goes full-width so the board shows at a
+     glance which picks a re-optimize will leave alone */
+  .slot.locked { box-shadow: inset 0 0 0 1px var(--accent), inset 3px 0 0 var(--accent); }
+  .picklock {
+    width: 100%; height: 28px; padding: 0 8px;
+    margin-bottom: var(--sp-2);
+    font-size: 12px; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .picklock svg { width: 11px; height: 11px; flex: none; }
+  .picklock:disabled { opacity: 0.7; cursor: default; }
+  .picklock:disabled:hover { background: var(--accent-dim); color: var(--accent); }
   .slot h3 {
     margin: 0 0 var(--sp-2);
     font-size: 11px; font-weight: 500; line-height: 16px; letter-spacing: 0.06em; text-transform: uppercase;
@@ -553,6 +565,18 @@
   .rpin.ours { cursor: grab; touch-action: none; }
   .rpin.dragging { z-index: 8; cursor: grabbing; transition: none; box-shadow: var(--elev-lg); }
   .rpin.drop-target { outline: 2px dashed var(--accent); outline-offset: 3px; }
+  /* a locked ally pick — re-optimizing bans and enemy picks leaves it alone.
+     Ring plus badge, never the badge alone: the pin is 34px and the lock has
+     to read at a glance during a timed pick phase. */
+  .rpin.ours.locked { box-shadow: 0 0 0 2px var(--accent-dim), var(--elev-sm); }
+  .rlock {
+    position: absolute; right: -4px; top: -4px;
+    width: 15px; height: 15px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--accent); color: var(--on-accent);
+    box-shadow: var(--elev-sm); pointer-events: none;
+  }
+  .rlock svg { width: 9px; height: 9px; display: block; }
   .rname .rp {
     display: block; font-weight: 500; font-size: 9px; line-height: 11px;
     color: var(--text-secondary); text-align: center;
@@ -578,7 +602,11 @@
     display: grid; gap: 8px; font-size: 13px; text-align: left;
   }
   .rift-pop select { margin: 0; font-size: 12px; }
-  .rift-pop .btn { height: auto; padding: 5px 10px; font-size: 12px; font-weight: 500; }
+  .rift-pop .btn {
+    height: auto; padding: 5px 10px; font-size: 12px; font-weight: 500;
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .rift-pop .btn svg { width: 11px; height: 11px; flex: none; }
   .rlive { color: var(--positive); font-size: 11px; font-weight: 500; }
   .bchip { padding: 3px; }
   .bchip img { width: 24px; height: 24px; border-radius: 6px; }
@@ -656,6 +684,15 @@
       grid-template-areas: "img role role" "img psel csel" "img stat stat";
       gap: 4px 10px; align-items: center;
       padding: 10px 12px; text-align: left;
+    }
+    /* the lock button only claims a row when it's actually rendered —
+       reserving one unconditionally leaves a gap on every unpicked slot */
+    .slot:has(.picklock) {
+      grid-template-areas: "img role role" "img psel csel" "img lock lock" "img stat stat";
+    }
+    .slot .picklock {
+      grid-area: lock; width: auto; justify-self: start;
+      height: 30px; padding: 0 12px; margin: 2px 0 0;
     }
     .slot h3 { grid-area: role; justify-content: flex-start; margin: 0; }
     .slot select { margin: 0; }
@@ -807,6 +844,24 @@ let enemyRole = new Map();   // enemy cid -> our ROLES key (inferred, editable)
 let liveDraft = { ts: 0, active: false };
 let liveOurs = [];           // our team's live picks [{championId, position}]
 let liveOursByRole = {};     // role -> cid the live sync last wrote into a slot
+// Our own locks, entered by hand — the manual counterpart to liveOurs. Role-
+// keyed to match the optimizer's `fixed` pin map; the slot at that role
+// supplies the player, so a lock pins the pairing, not just the champion.
+// Per-draft state: cleared with the board, when a live draft ends, and when
+// draft mode is switched off.
+let allyLock = new Map();    // ROLE -> championId one of our players locked
+// A champ one of our players locked is off the menu for the other four — but
+// stays available to the slot holding it.
+const allyTakenElsewhere = (cid, role) => {
+  if (!draftMode) return false;
+  for (const [r, c] of allyLock) if (r !== role && c === cid) return true;
+  return false;
+};
+// Locked in the client, not by hand — the live feed owns that role's champ
+// and its lock can't be toggled off here.
+const liveLocked = (role, champ) =>
+  champ != null && liveOurs.some(p => p.position === role && p.championId === champ);
+const allyLocked = (role, champ) => draftMode && (allyLock.has(role) || liveLocked(role, champ));
 let autoSwapNote = null;     // "Tristana → Kai'Sa" — last automatic dead-pick swap
 let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
 let dAdjCache = {};
@@ -1116,7 +1171,7 @@ function candidates(riotId, role, n = 3) {
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
-    avail: !draftUnavailable(cid) && !counterAvoid.has(cid),
+    avail: !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid, role),
     // in strict Role WR mode "played" means played IN THIS ROLE — a champ
     // with a real sample elsewhere but none here drops out of the top tier
     played: (strictRole
@@ -1180,17 +1235,23 @@ function optimizeChamps(topN = 10, fixed = {}) {
 // champions. With 9+ players this is millions of combinations, so the inner
 // loop is allocation-free: scores are computed from cached numbers and a comp
 // object is only built when it beats the current top-N floor.
-// fixed: {ROLE: championId} — champs our team already locked in the client;
-// the role is pinned to that champ while players and other roles stay fluid.
-function optimize(topN = 10, fixed = {}) {
+// fixed: {ROLE: championId} — champs our team already locked; the role is
+// pinned to that champ while players and other roles stay fluid.
+// pinPlayer: {ROLE: riotId} — a hand-entered lock is a player+champ pairing
+// ("Bob locks Ahri mid"), so it must not become "someone else plays Ahri
+// mid". The live feed only reports a lane, so it pins the champ alone.
+function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
   const pool = D.players.map(p => p.riotId).filter(r => included[r]);
   if (pool.length < 5) return [];
+  const pins = Object.entries(pinPlayer).map(([r, rid]) => [ROLES.indexOf(r), rid]);
   const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
   const keep = topN * 6;  // headroom for the dedup pass below
   let results = [], floor = -Infinity;
   if (!pairBoostIdx) buildPairBoost();
   for (const five of playerSets) {
+    if (pins.some(([, rid]) => !five.includes(rid))) continue;
     for (const perm of permutations(five)) {
+      if (pins.some(([i, rid]) => perm[i] !== rid)) continue;
       const cands = perm.map((rid, i) =>
         fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i]));
       if (cands.some(c => !c.length)) continue;
@@ -1290,6 +1351,10 @@ const ROLE_ICON = {
   BOTTOM: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M21 21H8l4.5-4.5h4v-4L21 8z"/><path opacity=".35" d="M3 3h13l-4.5 4.5h-4v4L3 16z"/></svg>`,
   UTILITY: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l8 3.2V11c0 4.8-3.3 8.7-8 11-4.7-2.3-8-6.2-8-11V5.2z"/></svg>`,
 };
+
+// Padlock — marks a pick the optimizer must not touch. Sized by the CSS of
+// whatever it sits in (the slot button, the rift pin badge).
+const LOCK_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a5 5 0 0 0-5 5v3H6.5A1.5 1.5 0 0 0 5 11.5v9A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.5-1.5H17V7a5 5 0 0 0-5-5zm-3 5a3 3 0 1 1 6 0v3H9V7z"/></svg>`;
 
 // Verdict thresholds are pure presentation — the score itself is untouched.
 function verdict(total) {
@@ -1492,8 +1557,8 @@ function renderDraft() {
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
       <button class="btn toggle ${lockRoles ? "active" : ""}" id="roleLockBtn"
         title="We're playing these roles: bans and enemy picks only re-pick champions — nothing reshuffles who plays where. Drag a pin to reassign a role by hand.">Lock roles</button>
-      ${manualBans.size || manualEnemy.size
-        ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans and enemy picks">Clear</button>` : ""}
+      ${manualBans.size || manualEnemy.size || allyLock.size
+        ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans, enemy picks, and pick locks">Clear</button>` : ""}
     </h2>
     <div class="rift" id="riftMap"></div>
     <div class="draft-row">
@@ -1505,7 +1570,7 @@ function renderDraft() {
       <span class="dlabel">Enemy</span>
       <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
-    <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Drag a blue pin onto another lane to swap roles — the board follows.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
+    <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Tap a blue pin to lock that pick in — re-optimizing picks around it. Drag one onto another lane to swap roles.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
     ${enemy.length && PROFILES
       ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs whoever might lane against them:</div>` + profileHTML(enemy)
       : `<div class="hint">Banned and enemy-picked champs drop out of candidates and the optimizer. Run <code>python3 lcu_bridge.py</code> next to the League client to sync this automatically.</div>`}
@@ -1544,6 +1609,7 @@ function renderDraft() {
     manualEnemy.clear();
     counterAvoid.clear();
     counterDismissed.clear();
+    allyLock.clear();
     for (const cid of [...enemyRole.keys()]) if (!liveEnemy.has(cid)) enemyRole.delete(cid);
     draftChanged();
   });
@@ -1624,10 +1690,16 @@ function renderRift() {
     const [ox, oy] = RIFT_POS.ours[role];
     const who = s.player ? s.player.split("#")[0] : "";
     const sup = role === "UTILITY" ? " rsup" : "";
-    const ourTip = `${s.champ ? champName(s.champ) + " · " : ""}${ROLE_LABEL[role]}${who ? " · " + who : ""}${s.player || s.champ ? " — drag to swap roles" : " — not picked yet"}`;
+    const lockedHere = allyLocked(role, s.champ);
+    const tail = lockedHere
+      ? " — locked in, re-optimizing keeps it (tap to unlock)"
+      : s.champ ? " — tap to lock, drag to swap roles"
+      : s.player ? " — not picked yet, tap to choose" : " — not picked yet";
+    const ourTip = `${s.champ ? champName(s.champ) + " · " : ""}${ROLE_LABEL[role]}${who ? " · " + who : ""}${tail}`;
     const our = s.champ
-      ? `<div class="rpin ours${sup}" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
+      ? `<div class="rpin ours${lockedHere ? " locked" : ""}${sup}" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
           <img src="${champIcon(s.champ)}" alt="">
+          ${lockedHere ? `<span class="rlock">${LOCK_ICON}</span>` : ""}
           <span class="rname">${champName(s.champ)}${who ? `<span class="rp">${who}</span>` : ""}</span>
         </div>`
       : `<div class="rpin rpin-empty ours${sup}" data-drag-slot="${i}" style="left:${ox}%;top:${oy}%" data-tip="${ourTip}">
@@ -1689,6 +1761,10 @@ function wireRiftDrag(m) {
       let target = null, moved = false;
       const onMove = ev => {
         if (ev.pointerId !== e.pointerId) return;
+        // A few pixels of finger jitter is a tap, not a drag — and a tap now
+        // opens the lock popover, so the pin must not chase sub-threshold
+        // movement and then snap back.
+        if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) <= 4) return;
         const x = (ev.clientX - rect.left) / rect.width * 100;
         const y = (ev.clientY - rect.top) / rect.height * 100;
         moved = true;
@@ -1723,12 +1799,22 @@ function wireRiftDrag(m) {
         unbind();
         if (moved && target != null && target !== src) {
           [slots[src], slots[target]] = [slots[target], slots[src]];
+          // Locks travel with the pins they belong to — a swap moves the whole
+          // pairing, so leaving the lock on the old role would pin a champion
+          // to a lane nobody is playing it in.
+          const [ra, rb] = [ROLES[src], ROLES[target]];
+          const [la, lb] = [allyLock.get(ra), allyLock.get(rb)];
+          allyLock.delete(ra); allyLock.delete(rb);
+          if (lb != null) allyLock.set(ra, lb);
+          if (la != null) allyLock.set(rb, la);
           autoSwapNote = null;  // the user is steering again
           rankedTabs.assigned = null;  // role assignment changed — stale
           if (activeTab === "assigned") switchTab("assigned");
+          candCache = {};  // locks moved — so did what the others may pick
           renderSlots(); renderScore();
         } else {
           renderRift();  // snap back
+          if (!moved) openAllyPop(src);
         }
       };
       window.addEventListener("pointermove", onMove);
@@ -1738,13 +1824,68 @@ function wireRiftDrag(m) {
   });
 }
 
+// Anchor a popover at a pin, opening toward the map's centre so it never
+// clips the edge. Shared by both sides' pins.
+function riftPop(pinEl) {
+  const pop = document.createElement("div");
+  pop.className = "rift-pop";
+  const x = parseFloat(pinEl.style.left), y = parseFloat(pinEl.style.top);
+  pop.style.left = x + "%";
+  pop.style.top = y + "%";
+  pop.style.transform = `translate(${x > 50 ? "calc(-100% + 17px)" : "-17px"}, ${y > 50 ? "calc(-100% - 26px)" : "26px"})`;
+  return pop;
+}
+
+// Tapping one of our own pins (as opposed to dragging it, which swaps roles):
+// lock the pick so re-optimization leaves it alone, or jump to the slot to
+// change it. This is the manual counterpart to the client's own lock-in.
+function openAllyPop(i) {
+  const m = $("#riftMap");
+  if (!m) return;
+  m.querySelectorAll(".rift-pop").forEach(p => p.remove());
+  const pinEl = m.querySelector(`[data-drag-slot="${i}"]`);
+  if (!pinEl) return;
+  const role = ROLES[i], s = slots[i];
+  const fromClient = liveLocked(role, s.champ);
+  const locked = allyLock.has(role) || fromClient;
+  const who = s.player ? s.player.split("#")[0] : ROLE_LABEL[role];
+  const pop = riftPop(pinEl);
+  pop.innerHTML = s.champ
+    ? `<b>${champName(s.champ)}${fromClient ? ` <span class="rlive">live</span>` : ""}</b>
+       <span class="hint" style="margin:0">${who} · ${ROLE_LABEL[role]}</span>
+       ${fromClient
+         ? `<span class="hint" style="margin:0">locked in the client — re-optimizing keeps it</span>`
+         : `<button type="button" class="btn toggle${locked ? " active" : ""}" data-ally-lock>${
+             locked ? LOCK_ICON + " Locked in" : "Lock this pick"}</button>`}
+       <button type="button" class="btn toggle" data-ally-edit>Change pick</button>`
+    : `<b>${who} · ${ROLE_LABEL[role]}</b>
+       <span class="hint" style="margin:0">no pick yet</span>
+       <button type="button" class="btn toggle" data-ally-edit>Choose champion</button>`;
+  m.appendChild(pop);
+  const lk = pop.querySelector("[data-ally-lock]");
+  if (lk) lk.addEventListener("click", () => {
+    if (locked) allyLock.delete(role); else allyLock.set(role, s.champ);
+    draftChanged();  // repaints the map, which disposes of this popover
+  });
+  pop.querySelector("[data-ally-edit]").addEventListener("click", () => {
+    pop.remove();
+    const sel = document.querySelector(`#slots select[data-slot="${i}"][data-kind="champ"]`);
+    if (!sel) return;
+    sel.scrollIntoView({ block: "center", behavior: "smooth" });
+    sel.focus();
+  });
+  const close = ev => {
+    if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", close); }
+  };
+  setTimeout(() => document.addEventListener("click", close), 0);
+}
+
 // The old enemy chip's controls, relocated onto the pin: lane lock (with the
 // same "auto" distribution label) and removal for manually entered picks.
 function openRiftPop(cid, pinEl) {
   const m = $("#riftMap");
   if (!m) return;
-  const old = m.querySelector(".rift-pop");
-  if (old) old.remove();
+  m.querySelectorAll(".rift-pop").forEach(p => p.remove());
   // effective distribution (after other picks' lane claims) unless the
   // user locked a lane — then the raw guess labels the "auto" option
   const guess = Object.entries(enemyRole.get(cid) ? laneDist(cid, true) : laneDist(cid))
@@ -1753,13 +1894,7 @@ function openRiftPop(cid, pinEl) {
     ? `auto — ${guess.slice(0, 2).map(([r, w]) => `${ROLE_LABEL[r]} ${Math.round(w * 100)}%`).join(" / ")}`
     : "lane?";
   const live = liveEnemy.has(cid);
-  const pop = document.createElement("div");
-  pop.className = "rift-pop";
-  // anchor at the pin, open toward the map's center so it never clips
-  const x = parseFloat(pinEl.style.left), y = parseFloat(pinEl.style.top);
-  pop.style.left = x + "%";
-  pop.style.top = y + "%";
-  pop.style.transform = `translate(${x > 50 ? "calc(-100% + 17px)" : "-17px"}, ${y > 50 ? "calc(-100% - 26px)" : "26px"})`;
+  const pop = riftPop(pinEl);
   pop.innerHTML = `
     <b>${champName(cid)}${live ? ` <span class="rlive">live</span>` : ""}</b>
     <select data-erole aria-label="${champName(cid)} lane" title="their lane — a flexible pick splits its matchup weight across likely lanes until you lock one">
@@ -1815,20 +1950,38 @@ function autoReplaceDead() {
 }
 
 // While a draft is underway, every ban and pick re-runs the full role-
-// agnostic optimizer over the checked squad — champs our team has locked in
-// the client are pinned to their role, everything else stays fluid. Returns
+// agnostic optimizer over the checked squad — champs our team has locked, in
+// the client or by hand, are pinned, everything else stays fluid. Returns
 // false when it can't run (no live draft, pool too small) so the cheaper
 // keep-roles dead-pick swap can take over.
+// What the optimizers may not touch: champs our side has locked, by hand or
+// in the client. Every entry point to a search goes through this — the
+// automatic re-optimize on a ban and both Optimize buttons — so a lock can
+// never be quietly overwritten by the path the user happened to take.
+function lockPins() {
+  const fixed = {}, pinPlayer = {};
+  if (!draftMode) return { fixed, pinPlayer };
+  for (const [role, cid] of allyLock) {
+    fixed[role] = cid;
+    const p = slots[ROLES.indexOf(role)].player;
+    if (p) pinPlayer[role] = p;  // the lock is on the pairing, not the lane
+  }
+  // The client is ground truth for what's actually locked in champ select, so
+  // it overrides a hand-entered lock for the same role. The player stays
+  // pinned either way — only the champion changes hands.
+  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) fixed[p.position] = p.championId;
+  return { fixed, pinPlayer };
+}
+
 function autoOptimize(deadNames) {
   if (!draftMode) return false;
   if (!liveDraft.active && !effBans().size && !effEnemy().size) return false;
   if (D.players.filter(p => included[p.riotId]).length < 5) return false;
-  const fixed = {};
-  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) fixed[p.position] = p.championId;
+  const { fixed, pinPlayer } = lockPins();
   // Roles locked: search champions only, players stay in their lanes. An
   // incomplete board falls through to autoReplaceDead, which is also
   // role-preserving.
-  const res = rolesLocked() ? (optimizeChamps(10, fixed) || []) : optimize(10, fixed);
+  const res = rolesLocked() ? (optimizeChamps(10, fixed) || []) : optimize(10, fixed, pinPlayer);
   if (!res.length) return false;
   const before = slots.map(s => s.player + "|" + s.champ).join();
   const hadChamps = slots.some(s => s.champ);
@@ -1848,6 +2001,11 @@ function autoOptimize(deadNames) {
 function draftChanged(rerenderCard = true) {
   dAdjCache = {};
   candCache = {};
+  // A lock on a champ that just got banned or taken — or that the player
+  // agreed to draft around after a hard-counter flag — is no longer a lock.
+  // Drop it, or the pin would keep forcing a pick nobody can play.
+  for (const [role, cid] of [...allyLock])
+    if (draftUnavailable(cid) || counterAvoid.has(cid)) allyLock.delete(role);
   const dead = slots.flatMap(s => {
     if (!s.champ) return [];
     if (draftUnavailable(s.champ)) return [champName(s.champ)];
@@ -1872,11 +2030,18 @@ function draftChanged(rerenderCard = true) {
 
 function applyLiveDraft(j) {
   if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); return; }
+  const wasActive = liveDraft.active;
   liveDraft = j;
   liveBans = new Set(j.active ? j.bans || [] : []);
   liveEnemy = new Set(j.active ? j.enemy || [] : []);
   liveOurs = j.active ? j.ours || [] : [];
-  if (!j.active) { counterAvoid.clear(); counterDismissed.clear(); }  // per-draft decisions
+  if (!j.active) {
+    counterAvoid.clear(); counterDismissed.clear();  // per-draft decisions
+    // Ally locks belong to the draft that just ended — but a bridge heartbeat
+    // arriving mid-manual-draft is not the end of anything, so only a draft
+    // going active → inactive clears them.
+    if (wasActive) allyLock.clear();
+  }
   for (const cid of liveEnemy) ensureEnemyCounters(cid);
   // Reflect our own locked picks on the board: fill the matching role's champ,
   // but never clobber a champ the user chose themselves — only empty slots and
@@ -1884,6 +2049,9 @@ function applyLiveDraft(j) {
   if (j.active) for (const p of liveOurs) {
     const i = ROLES.indexOf(p.position);
     if (i < 0 || !p.championId) continue;
+    // The client now owns this lane's champion, so a hand lock on it is spent
+    // — leaving it would resurrect an old pick if the feed stops reporting.
+    allyLock.delete(p.position);
     const cur = slots[i].champ;
     if (cur == null || cur === liveOursByRole[p.position] || cur === p.championId) {
       slots[i].champ = p.championId;
@@ -2113,11 +2281,24 @@ function renderSlots() {
         stat += `<br><span class="scorechip">score ${pct(slotScore(s.player, s.champ, role))}</span>`;
       }
     }
-    return `<div class="slot ${s.champ ? "filled" : ""}">
+    // The lock control only exists while drafting — outside a draft nothing
+    // re-optimizes underneath the board, so there is nothing to protect from.
+    const fromClient = liveLocked(role, s.champ);
+    const isLocked = allyLock.has(role) || fromClient;
+    const lockBtn = draftMode && s.champ
+      ? `<button type="button" class="btn toggle picklock${isLocked ? " active" : ""}" data-lockslot="${i}"
+          ${fromClient ? "disabled" : ""}
+          title="${fromClient
+            ? "Locked in the League client — the live sync owns this pick"
+            : "A locked pick survives re-optimization: bans and enemy picks re-pick around it instead of replacing it"}"
+          >${isLocked ? LOCK_ICON + (fromClient ? " Locked (client)" : " Locked in") : "Lock this pick"}</button>`
+      : "";
+    return `<div class="slot ${s.champ ? "filled" : ""}${isLocked ? " locked" : ""}">
       <h3>${ROLE_ICON[role]}${ROLE_LABEL[role]}</h3>
       <select data-slot="${i}" data-kind="player" aria-label="${ROLE_LABEL[role]} player"><option value="">— player —</option>${playerOpts}</select>
       ${comfortLine}
       <select data-slot="${i}" data-kind="champ" aria-label="${ROLE_LABEL[role]} champion" ${s.player ? "" : "disabled"}><option value="">— champion —</option>${champOpts}</select>
+      ${lockBtn}
       ${s.champ
         ? `<div class="portrait-wrap"><img class="portrait" src="${champIcon(s.champ)}" alt="${champName(s.champ)}" title="${champName(s.champ)}"></div>`
         : `<div class="portrait-empty">?</div>`}
@@ -2130,12 +2311,26 @@ function renderSlots() {
     if (e.target.dataset.kind === "player") {
       slots[i].player = e.target.value || null;
       slots[i].champ = null;
+      allyLock.delete(ROLES[i]);  // the lock was on a pairing that no longer exists
       ensureIncluded([slots[i].player]);
     }
-    else slots[i].champ = e.target.value ? +e.target.value : null;
+    else {
+      slots[i].champ = e.target.value ? +e.target.value : null;
+      // Choosing a champion by hand mid-draft is the act of locking it: the
+      // next ban has to re-optimize around the pick, not delete it.
+      if (draftMode && slots[i].champ != null) allyLock.set(ROLES[i], slots[i].champ);
+      else allyLock.delete(ROLES[i]);
+    }
     rankedTabs.assigned = null;  // role assignment changed — stale
     if (activeTab === "assigned") switchTab("assigned");
+    candCache = {};  // a lock changes what the other four may pick
     renderSlots(); renderScore();
+  }));
+  document.querySelectorAll("#slots [data-lockslot]").forEach(b => b.addEventListener("click", () => {
+    const i = +b.dataset.lockslot, role = ROLES[i];
+    if (allyLock.has(role)) allyLock.delete(role);
+    else if (slots[i].champ != null) allyLock.set(role, slots[i].champ);
+    draftChanged();
   }));
   // the map mirrors the board — slot edits reach here without renderDraft
   renderRift();
@@ -2345,7 +2540,8 @@ function runOptimize() {
   // both entry points to the full search are hidden while the lock is on;
   // this keeps any other path (keyboard, stale handler) honest
   if (rolesLocked()) return runOptimizeChamps();
-  rankedTabs.overall = optimize(10);
+  const { fixed, pinPlayer } = lockPins();
+  rankedTabs.overall = optimize(10, fixed, pinPlayer);
   if (!rankedTabs.overall.length) rankedTabs.overall = null;
   else applyComp(rankedTabs.overall[0]);
   activeTab = "overall";
@@ -2353,7 +2549,7 @@ function runOptimize() {
 }
 
 function runOptimizeChamps() {
-  rankedTabs.assigned = optimizeChamps(10);
+  rankedTabs.assigned = optimizeChamps(10, lockPins().fixed);
   if (rankedTabs.assigned) applyComp(rankedTabs.assigned[0]);
   activeTab = "assigned";
   renderTabs();
@@ -2553,6 +2749,7 @@ function initDraftToggle() {
     localStorage.setItem("draftMode", draftMode ? "1" : "0");
     t.classList.toggle("active", draftMode);
     document.body.classList.toggle("drafting", draftMode);
+    if (!draftMode) allyLock.clear();  // locks are draft-scoped, like the bans
     setDraftLive(draftMode);
     draftChanged();
   });
