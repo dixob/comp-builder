@@ -126,7 +126,10 @@ def post_draft(worker_url, token, payload):
     req = urllib.request.Request(
         worker_url.rstrip("/") + "/draft",
         data=json.dumps(payload).encode(),
-        headers={"content-type": "application/json", "x-admin-token": token},
+        # Cloudflare's edge blocks urllib's default "Python-urllib/x.y" UA
+        # (HTTP 403, error 1010) — a normal-looking one clears it.
+        headers={"content-type": "application/json", "x-admin-token": token,
+                 "user-agent": "lcu-bridge/1.0"},
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
