@@ -450,6 +450,9 @@
      each also carries its row label, never color alone */
   .dchip-ban { border-color: var(--negative); background: var(--negative-dim); }
   .dchip-enemy { border-color: var(--enemy); background: var(--enemy-dim); }
+  /* fearless exclusions read as "spent", not "threat" — muted, no red */
+  .dchip-fear { border-color: var(--outline); background: var(--layer-2); }
+  .dchip-fear img { filter: grayscale(0.7); }
   .dchip.live { border-color: var(--positive); }
   .dchip button {
     font: inherit; background: none; border: none; cursor: pointer;
@@ -488,11 +491,11 @@
     color: var(--on-accent); background: var(--accent); border-color: transparent;
   }
   body.roles-locked #optChamps:hover { background: var(--accent); filter: brightness(1.08); }
-  #draftClear, #roleLockBtn {
+  #draftClear, #roleLockBtn, #fearlessBtn {
     margin-left: var(--sp-2); padding: 3px 10px; height: auto; font-size: 11px; font-weight: 500;
     letter-spacing: 0; text-transform: none; flex: none;
   }
-  #roleLockBtn { margin-left: auto; }  /* pushes itself (and Clear) right */
+  #fearlessBtn { margin-left: auto; }  /* pushes itself (and the rest) right */
   .counter-flag { margin-bottom: 8px; }
   .counter-flag .banned-note { color: var(--negative); font-weight: 600; }
   .counter-flag .btn {
@@ -862,6 +865,18 @@ const allyTakenElsewhere = (cid, role) => {
 const liveLocked = (role, champ) =>
   champ != null && liveOurs.some(p => p.position === role && p.championId === champ);
 const allyLocked = (role, champ) => draftMode && (allyLock.has(role) || liveLocked(role, champ));
+// Fearless session: a champ one of our players already took into a finished
+// flex game this session can't be picked again. Fed by the worker's /fearless
+// endpoint (match history), so it counts real games — not champ selects — and
+// works no matter which machine ran the bridge. Session-scoped, not
+// draft-scoped: it survives Clear and individual drafts, and only the toggle
+// ends it.
+const FEARLESS_LOOKBACK_S = 3 * 3600;
+let fearless = localStorage.getItem("fearless") === "1";
+let fearlessSince = +(localStorage.getItem("fearlessSince") || 0);
+let fearlessPicks = JSON.parse(localStorage.getItem("fearlessPicks") || "[]");
+let fearlessChamps = new Set(fearlessPicks.map(p => p.championId));
+const effFearless = () => draftMode && fearless ? fearlessChamps : new Set();
 let autoSwapNote = null;     // "Tristana → Kai'Sa" — last automatic dead-pick swap
 let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
 let dAdjCache = {};
@@ -870,7 +885,8 @@ const MATCHUP_CAP = 0.03;      // per-lane-opponent cap (±3pp)
 
 const effBans = () => draftMode ? new Set([...manualBans, ...liveBans]) : new Set();
 const effEnemy = () => draftMode ? new Set([...manualEnemy, ...liveEnemy]) : new Set();
-const draftUnavailable = cid => draftMode && (effBans().has(cid) || effEnemy().has(cid));
+const draftUnavailable = cid =>
+  draftMode && (effBans().has(cid) || effEnemy().has(cid) || effFearless().has(cid));
 
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
@@ -1555,6 +1571,8 @@ function renderDraft() {
   el.innerHTML = `
     <h2>Summoner's Rift
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
+      <button class="btn toggle ${fearless ? "active" : ""}" id="fearlessBtn"
+        title="Fearless session: champs we already played in finished flex games can't be picked again. Turning it on also counts games from the past 3 hours, so a session started at game two still knows about game one.">Fearless</button>
       <button class="btn toggle ${lockRoles ? "active" : ""}" id="roleLockBtn"
         title="We're playing these roles: bans and enemy picks only re-pick champions — nothing reshuffles who plays where. Drag a pin to reassign a role by hand.">Lock roles</button>
       ${manualBans.size || manualEnemy.size || allyLock.size
@@ -1570,6 +1588,14 @@ function renderDraft() {
       <span class="dlabel">Enemy</span>
       <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
+    ${fearless ? `<div class="draft-row">
+      <span class="dlabel">Played</span>
+      ${fearlessPicks.map(p => `<span class="dchip dchip-fear"
+          title="${champName(p.championId)} — ${p.riotId.split("#")[0]} already played it this session">
+        <img src="${champIcon(p.championId)}" alt="${champName(p.championId)}">
+      </span>`).join("")
+      || `<span class="hint" style="margin:0">no finished flex games in the session yet</span>`}
+    </div>` : ""}
     <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Tap a blue pin to lock that pick in — re-optimizing picks around it. Drag one onto another lane to swap roles.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
     ${enemy.length && PROFILES
       ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs whoever might lane against them:</div>` + profileHTML(enemy)
@@ -1597,6 +1623,25 @@ function renderDraft() {
   wire("#enemyInput", cid => {
     manualEnemy.add(cid);
     ensureEnemyCounters(cid);
+  });
+  el.querySelector("#fearlessBtn").addEventListener("click", () => {
+    fearless = !fearless;
+    localStorage.setItem("fearless", fearless ? "1" : "0");
+    if (fearless) {
+      // The lookback is what lets the toggle come on mid-session: game one is
+      // already in match history, so it's counted even though nobody had
+      // fearless on while it was played.
+      fearlessSince = Math.floor(Date.now() / 1000) - FEARLESS_LOOKBACK_S;
+      localStorage.setItem("fearlessSince", fearlessSince);
+      fetchFearless();
+    } else {
+      fearlessSince = 0;
+      fearlessPicks = [];
+      fearlessChamps = new Set();
+      localStorage.removeItem("fearlessSince");
+      localStorage.removeItem("fearlessPicks");
+    }
+    draftChanged();
   });
   el.querySelector("#roleLockBtn").addEventListener("click", () => {
     lockRoles = !lockRoles;
@@ -1986,7 +2031,7 @@ function lockPins() {
 
 function autoOptimize(deadNames) {
   if (!draftMode) return false;
-  if (!liveDraft.active && !effBans().size && !effEnemy().size) return false;
+  if (!liveDraft.active && !effBans().size && !effEnemy().size && !effFearless().size) return false;
   if (D.players.filter(p => included[p.riotId]).length < 5) return false;
   const { fixed, pinPlayer } = lockPins();
   // Roles locked: search champions only, players stay in their lanes. An
@@ -2071,6 +2116,9 @@ function applyLiveDraft(j) {
   }
   for (const cid of liveEnemy) ensureEnemyCounters(cid);
   if (j.active) {
+    // A champ select opening is the moment fearless most needs fresh data:
+    // the previous game ended minutes ago and is in match history by now.
+    if (!wasActive) fetchFearless();
     const recognized = liveOurs.map(p => riotIdForLive(p.riotId)).filter(Boolean);
     for (const rid of recognized) ensureIncluded([rid]);
     // A full known 5-stack tells us exactly who's playing this game — a
@@ -2169,6 +2217,30 @@ document.addEventListener("visibilitychange", () => {
     connectDraftWS();
   }
 });
+
+// Pull the fearless session's finished flex games from the worker and rebuild
+// the exclusion set. Runs on toggle-on, when a champ select opens, and on a
+// slow poll — match-v5 lags a game's end by a minute or two, so any single
+// moment can miss; the poll is the backstop.
+let fearlessFetching = false;
+async function fetchFearless() {
+  if (!fearless || !WORKER_URL || fearlessFetching) return;
+  fearlessFetching = true;
+  try {
+    const j = await fetch(`${WORKER_URL}/fearless?since=${fearlessSince}`).then(r => r.json());
+    if (Array.isArray(j.games)) {
+      const picks = j.games.flatMap(g => g.picks);
+      if (JSON.stringify(picks) !== JSON.stringify(fearlessPicks)) {
+        fearlessPicks = picks;
+        fearlessChamps = new Set(picks.map(p => p.championId));
+        localStorage.setItem("fearlessPicks", JSON.stringify(picks));
+        draftChanged();
+      }
+    }
+  } catch { /* keep the last-known set; the next poll retries */ }
+  fearlessFetching = false;
+}
+setInterval(() => { if (fearless && draftMode && !document.hidden) fetchFearless(); }, 120e3);
 
 // Sets `included` and keeps the squad checklist checkbox in sync — direct
 // state writes elsewhere would leave the visible list stale.
@@ -2297,7 +2369,8 @@ function renderSlots() {
         if (s.player === CS_MIN_PLAYER && e && e.secs)
           stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
         if (draftUnavailable(s.champ))
-          stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!" : "enemy took it!"}</span>`;
+          stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!"
+            : effEnemy().has(s.champ) ? "enemy took it!" : "already played this session!"}</span>`;
         else {
           const hc = hardCounters(s.champ, role);
           if (hc.length)
@@ -2407,7 +2480,8 @@ function renderScore() {
   const dead = assign.filter(a => draftUnavailable(a.champ));
   const v = dead.length
     ? { label: dead.map(a => champName(a.champ)).join(", ")
-        + (effBans().has(dead[0].champ) ? " banned" : " taken") + " — re-optimize", cls: "bad" }
+        + (effBans().has(dead[0].champ) ? " banned" : effEnemy().has(dead[0].champ)
+          ? " taken" : " already played this session") + " — re-optimize", cls: "bad" }
     : verdict(sc.total);
   verdictEl.hidden = false;
   verdictEl.textContent = v.label;
@@ -2851,6 +2925,16 @@ function initFlexToggle() {
   initFlexToggle();
   initRoleToggle();
   initDraftToggle();
+  // A fearless session left on overnight is over, not resumable — the worker
+  // refuses a >24h lookback anyway, so expire it instead of erroring forever.
+  if (fearless && fearlessSince < Math.floor(Date.now() / 1000) - 24 * 3600) {
+    fearless = false;
+    fearlessPicks = [];
+    fearlessChamps = new Set();
+    localStorage.setItem("fearless", "0");
+    localStorage.removeItem("fearlessSince");
+    localStorage.removeItem("fearlessPicks");
+  } else if (fearless) fetchFearless();
   if (liveMode) { initRefreshButton(); doRefresh(true); }
 })();
 </script>

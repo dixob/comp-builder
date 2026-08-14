@@ -16,6 +16,8 @@
 //                     every update the moment the bridge posts it
 //   GET  /counters -> ?champ=<id>&pos=<TOP|JUNGLE|MID|ADC|SUPPORT> lane-matchup
 //                     records from OP.GG, KV-cached for a day
+//   GET  /fearless -> ?since=<epoch seconds> flex games our players finished
+//                     since then, for fearless-session champ exclusions
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
 //
 // Free-tier budget per /refresh: 6 match-id calls + <=MAX_NEW_MATCHES match
@@ -343,6 +345,59 @@ async function counters(env, url) {
   return new Response(body, { headers: { "content-type": "application/json", ...CORS } });
 }
 
+// --- fearless session -----------------------------------------------------
+
+// Which champs our tracked players already played in flex since a session
+// start. Reads finished games straight from match-v5 (never the aggregates —
+// those can't say *when* a champ was played), so the page can treat them as
+// unpickable for the rest of the session. Per-match extracts are KV-cached:
+// a poll after the first costs only the per-player id lookups.
+const FEARLESS_MATCH_TTL = 24 * 60 * 60;
+const FLEX_QUEUE = 440;
+
+async function fearless(env, url) {
+  const since = Number(url.searchParams.get("since"));
+  const now = Math.floor(Date.now() / 1000);
+  // A session is an evening, not an era — an ancient `since` means a stale
+  // client, and honoring it would fetch an unbounded pile of matches.
+  if (!since || since < now - 24 * 3600 || since > now)
+    return json({ error: "since=<epoch seconds within the past 24h> required" }, 400);
+  const state = await env.KV.get("state", "json");
+  if (!state) return json({ error: "not seeded" }, 503);
+  const region = REGION_OF[state.config.platform];
+  const ridOf = {};
+  for (const a of state.config.riotIds)
+    for (const pu of a.puuids || [a.puuid]) ridOf[pu] = a.riotId;
+
+  const ids = new Set();
+  for (const { puuid } of state.config.riotIds)
+    for (const id of await riot(env, region,
+      `/lol/match/v5/matches/by-puuid/${puuid}/ids?startTime=${since}&queue=${FLEX_QUEUE}&count=20`))
+      ids.add(id);
+
+  const games = [];
+  for (const id of [...ids].sort()) {
+    const key = `fearless:${id}`;
+    let g = await env.KV.get(key, "json");
+    if (!g) {
+      const m = await riot(env, region, `/lol/match/v5/matches/${id}`);
+      let dur = m.info.gameDuration;
+      if (dur > 20000) dur = Math.floor(dur / 1000); // pre-11.20 matches report ms
+      g = {
+        gameEnd: m.info.gameEndTimestamp || m.info.gameCreation + dur * 1000,
+        // A remake burns nothing — nobody meaningfully played the champ.
+        remake: dur < 300,
+        picks: m.info.participants.filter(p => ridOf[p.puuid])
+          .map(p => ({ riotId: ridOf[p.puuid], championId: p.championId })),
+      };
+      await env.KV.put(key, JSON.stringify(g), { expirationTtl: FEARLESS_MATCH_TTL });
+    }
+    if (!g.remake) games.push({ matchId: id, ...g });
+  }
+  games.sort((a, b) => a.gameEnd - b.gameEnd);
+  return json({ since, games });
+}
+
 // --- cron: meta + champion names ------------------------------------------
 
 async function refreshMeta(env) {
@@ -402,6 +457,7 @@ export default {
       }
       if (url.pathname === "/refresh" && req.method === "POST") return refresh(env);
       if (url.pathname === "/counters") return counters(env, url);
+      if (url.pathname === "/fearless") return fearless(env, url);
       if (url.pathname === "/draft" || url.pathname === "/draft/ws") {
         if (req.method === "POST" &&
             (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN))
