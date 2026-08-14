@@ -1969,7 +1969,17 @@ function lockPins() {
   // The client is ground truth for what's actually locked in champ select, so
   // it overrides a hand-entered lock for the same role. The player stays
   // pinned either way — only the champion changes hands.
-  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) fixed[p.position] = p.championId;
+  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) {
+    fixed[p.position] = p.championId;
+    // Recognized from their Riot ID: pin them to this lane too, so the
+    // search stops treating "who plays what" as open — the client already
+    // answered that. A hand lock (set above) is a deliberate override and
+    // wins if present.
+    if (!pinPlayer[p.position]) {
+      const rid = riotIdForLive(p.riotId);
+      if (rid) pinPlayer[p.position] = rid;
+    }
+  }
   return { fixed, pinPlayer };
 }
 
@@ -2028,6 +2038,16 @@ function draftChanged(rerenderCard = true) {
   if (had[activeTab]) switchTab(activeTab);
 }
 
+// Match a live teammate to one of our tracked players by Riot ID (case-
+// insensitive — the client's casing isn't guaranteed to match the roster's)
+// — lets a live draft identify *who* is in a lane, not just what's picked.
+function riotIdForLive(riotId) {
+  if (!riotId) return null;
+  const key = riotId.toLowerCase();
+  const p = D.players.find(p => p.riotId.toLowerCase() === key);
+  return p ? p.riotId : null;
+}
+
 function applyLiveDraft(j) {
   if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); return; }
   const wasActive = liveDraft.active;
@@ -2057,6 +2077,11 @@ function applyLiveDraft(j) {
       slots[i].champ = p.championId;
       liveOursByRole[p.position] = p.championId;
     }
+    // A recognized teammate becomes an implicit pin (see lockPins) — opt them
+    // into the pool so that pin doesn't empty every 5-player combo out from
+    // under the optimizer.
+    const rid = riotIdForLive(p.riotId);
+    if (rid) ensureIncluded([rid]);
   }
   draftChanged();
 }

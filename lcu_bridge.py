@@ -115,8 +115,15 @@ def extract_draft(session):
             if sink is not None:
                 sink.add(cid)
             else:
+                # gameName/tagLine are only visible for allies (theirTeam
+                # gets nameVisibilityType-gated data instead) — this is the
+                # same "Name#Tag" shape as config.json's riot_ids, so the
+                # page can match a slot to a tracked roster player instead
+                # of just a role.
+                name, tag = p.get("gameName"), p.get("tagLine")
                 ours.append({"championId": cid,
-                             "position": (p.get("assignedPosition") or "").upper()})
+                             "position": (p.get("assignedPosition") or "").upper(),
+                             "riotId": f"{name}#{tag}" if name and tag else None})
     b = session.get("bans", {})
     bans.update(x for x in b.get("myTeamBans", []) + b.get("theirTeamBans", []) if x)
     return {"active": True, "bans": sorted(bans), "enemy": sorted(enemy), "ours": ours}
