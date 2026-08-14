@@ -1969,12 +1969,13 @@ function lockPins() {
   // The client is ground truth for what's actually locked in champ select, so
   // it overrides a hand-entered lock for the same role. The player stays
   // pinned either way — only the champion changes hands.
-  for (const p of liveOurs) if (p.championId && ROLES.includes(p.position)) {
-    fixed[p.position] = p.championId;
+  for (const p of liveOurs) if (ROLES.includes(p.position)) {
+    if (p.championId) fixed[p.position] = p.championId;
     // Recognized from their Riot ID: pin them to this lane too, so the
-    // search stops treating "who plays what" as open — the client already
-    // answered that. A hand lock (set above) is a deliberate override and
-    // wins if present.
+    // search stops treating "who plays what" as open — role assignments are
+    // known from the moment champ select opens, before anyone picks a
+    // champion. A hand lock (set above) is a deliberate override and wins
+    // if present.
     if (!pinPlayer[p.position]) {
       const rid = riotIdForLive(p.riotId);
       if (rid) pinPlayer[p.position] = rid;
@@ -2060,28 +2061,43 @@ function applyLiveDraft(j) {
     // Ally locks belong to the draft that just ended — but a bridge heartbeat
     // arriving mid-manual-draft is not the end of anything, so only a draft
     // going active → inactive clears them.
-    if (wasActive) allyLock.clear();
+    if (wasActive) {
+      allyLock.clear();
+      // The squad checklist was narrowed to this game's roster below — a
+      // benched teammate shouldn't stay excluded once there's no live game
+      // to exclude them from.
+      for (const p of D.players) setIncluded(p.riotId, true);
+    }
   }
   for (const cid of liveEnemy) ensureEnemyCounters(cid);
-  // Reflect our own locked picks on the board: fill the matching role's champ,
-  // but never clobber a champ the user chose themselves — only empty slots and
-  // slots this sync wrote earlier follow the client.
-  if (j.active) for (const p of liveOurs) {
-    const i = ROLES.indexOf(p.position);
-    if (i < 0 || !p.championId) continue;
-    // The client now owns this lane's champion, so a hand lock on it is spent
-    // — leaving it would resurrect an old pick if the feed stops reporting.
-    allyLock.delete(p.position);
-    const cur = slots[i].champ;
-    if (cur == null || cur === liveOursByRole[p.position] || cur === p.championId) {
-      slots[i].champ = p.championId;
-      liveOursByRole[p.position] = p.championId;
+  if (j.active) {
+    const recognized = liveOurs.map(p => riotIdForLive(p.riotId)).filter(Boolean);
+    for (const rid of recognized) ensureIncluded([rid]);
+    // A full known 5-stack tells us exactly who's playing this game — a
+    // tracked player who isn't one of them (benched, playing on an alt,
+    // whatever) shouldn't still be offered as a candidate for an open slot.
+    // Partial recognition (a non-tracked sub in the lobby) can't safely
+    // narrow the pool below 5, so it's left as ensureIncluded left it.
+    if (new Set(recognized).size === 5) {
+      const playing = new Set(recognized);
+      for (const p of D.players) setIncluded(p.riotId, playing.has(p.riotId));
     }
-    // A recognized teammate becomes an implicit pin (see lockPins) — opt them
-    // into the pool so that pin doesn't empty every 5-player combo out from
-    // under the optimizer.
-    const rid = riotIdForLive(p.riotId);
-    if (rid) ensureIncluded([rid]);
+    // Reflect our own locked picks on the board: fill the matching role's
+    // champ, but never clobber a champ the user chose themselves — only
+    // empty slots and slots this sync wrote earlier follow the client.
+    for (const p of liveOurs) {
+      const i = ROLES.indexOf(p.position);
+      if (i < 0 || !p.championId) continue;
+      // The client now owns this lane's champion, so a hand lock on it is
+      // spent — leaving it would resurrect an old pick if the feed stops
+      // reporting.
+      allyLock.delete(p.position);
+      const cur = slots[i].champ;
+      if (cur == null || cur === liveOursByRole[p.position] || cur === p.championId) {
+        slots[i].champ = p.championId;
+        liveOursByRole[p.position] = p.championId;
+      }
+    }
   }
   draftChanged();
 }
@@ -2153,6 +2169,15 @@ document.addEventListener("visibilitychange", () => {
     connectDraftWS();
   }
 });
+
+// Sets `included` and keeps the squad checklist checkbox in sync — direct
+// state writes elsewhere would leave the visible list stale.
+function setIncluded(rid, val) {
+  if (included[rid] === val) return;
+  included[rid] = val;
+  const cb = document.querySelector(`[data-player="${CSS.escape(rid)}"]`);
+  if (cb) cb.checked = val;
+}
 
 // Slotting a player is an implicit opt-in: re-check them in the squad list
 // and refresh anything that depends on the player pool.

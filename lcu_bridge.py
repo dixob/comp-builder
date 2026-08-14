@@ -107,23 +107,20 @@ def extract_draft(session):
                 bans.add(a["championId"])
             elif a.get("type") == "pick" and not a.get("isAllyAction"):
                 enemy.add(a["championId"])
-    for team, sink in (("theirTeam", enemy), ("myTeam", None)):
-        for p in session.get(team, []):
-            cid = p.get("championId")
-            if not cid:
-                continue
-            if sink is not None:
-                sink.add(cid)
-            else:
-                # gameName/tagLine are only visible for allies (theirTeam
-                # gets nameVisibilityType-gated data instead) — this is the
-                # same "Name#Tag" shape as config.json's riot_ids, so the
-                # page can match a slot to a tracked roster player instead
-                # of just a role.
-                name, tag = p.get("gameName"), p.get("tagLine")
-                ours.append({"championId": cid,
-                             "position": (p.get("assignedPosition") or "").upper(),
-                             "riotId": f"{name}#{tag}" if name and tag else None})
+    for p in session.get("theirTeam", []):
+        cid = p.get("championId")
+        if cid:
+            enemy.add(cid)
+    # myTeam identity (gameName/tagLine — only visible for allies, theirTeam
+    # gets nameVisibilityType-gated data instead) is reported even before a
+    # champion is locked: role assignments exist from the moment champ
+    # select opens, so the page can tell who's actually in this game as
+    # early as possible instead of waiting on every pick to land.
+    for p in session.get("myTeam", []):
+        name, tag = p.get("gameName"), p.get("tagLine")
+        ours.append({"championId": p.get("championId") or None,
+                     "position": (p.get("assignedPosition") or "").upper(),
+                     "riotId": f"{name}#{tag}" if name and tag else None})
     b = session.get("bans", {})
     bans.update(x for x in b.get("myTeamBans", []) + b.get("theirTeamBans", []) if x)
     return {"active": True, "bans": sorted(bans), "enemy": sorted(enemy), "ours": ours}
