@@ -1975,6 +1975,9 @@ function autoReplaceDead() {
     const s = slots[i];
     if (!s.player || !s.champ) continue;
     if (!draftUnavailable(s.champ) && !counterAvoid.has(s.champ)) continue;
+    // dead but hand-locked: the user's pick is not ours to swap — the slot
+    // note says why it's dead, they decide when to give it up
+    if (allyLock.get(ROLES[i]) === s.champ) continue;
     const used = new Set(slots.map(x => x.champ));
     const cands = candidates(s.player, ROLES[i], 15).filter(c => !used.has(c));
     if (!cands.length) continue;
@@ -2011,11 +2014,12 @@ function lockPins() {
     const p = slots[ROLES.indexOf(role)].player;
     if (p) pinPlayer[role] = p;  // the lock is on the pairing, not the lane
   }
-  // The client is ground truth for what's actually locked in champ select, so
-  // it overrides a hand-entered lock for the same role. The player stays
-  // pinned either way — only the champion changes hands.
+  // The client knows what's actually locked in champ select, but a hand lock
+  // that differs from it is the user deliberately exploring "what if we
+  // played X here" — the board is a sandbox, so the hand lock wins and the
+  // client champ only fills lanes nobody has touched.
   for (const p of liveOurs) if (ROLES.includes(p.position)) {
-    if (p.championId) fixed[p.position] = p.championId;
+    if (p.championId && !allyLock.has(p.position)) fixed[p.position] = p.championId;
     // Recognized from their Riot ID: pin them to this lane too, so the
     // search stops treating "who plays what" as open — role assignments are
     // known from the moment champ select opens, before anyone picks a
@@ -2057,13 +2061,16 @@ function autoOptimize(deadNames) {
 function draftChanged(rerenderCard = true) {
   dAdjCache = {};
   candCache = {};
-  // A lock on a champ that just got banned or taken — or that the player
-  // agreed to draft around after a hard-counter flag — is no longer a lock.
-  // Drop it, or the pin would keep forcing a pick nobody can play.
+  // A hand-locked pick stays put even when it gets banned, taken, or
+  // fearless-spent: the user put it there to look at it, and yanking it on
+  // the next passive event (a live heartbeat, a ban landing) made comparing
+  // champs impossible. The slot note and verdict banner flag it; an explicit
+  // Optimize click is what releases it (see releaseDeadLocks). counterAvoid
+  // is different — the user already agreed to draft around that champ.
   for (const [role, cid] of [...allyLock])
-    if (draftUnavailable(cid) || counterAvoid.has(cid)) allyLock.delete(role);
-  const dead = slots.flatMap(s => {
-    if (!s.champ) return [];
+    if (counterAvoid.has(cid)) allyLock.delete(role);
+  const dead = slots.flatMap((s, i) => {
+    if (!s.champ || allyLock.get(ROLES[i]) === s.champ) return [];
     if (draftUnavailable(s.champ)) return [champName(s.champ)];
     if (counterAvoid.has(s.champ)) return [champName(s.champ) + " (hard-countered)"];
     return [];
@@ -2136,10 +2143,11 @@ function applyLiveDraft(j) {
     for (const p of liveOurs) {
       const i = ROLES.indexOf(p.position);
       if (i < 0 || !p.championId) continue;
-      // The client now owns this lane's champion, so a hand lock on it is
-      // spent — leaving it would resurrect an old pick if the feed stops
-      // reporting.
-      allyLock.delete(p.position);
+      // A hand lock the client confirmed is spent — leaving it would
+      // resurrect an old pick if the feed stops reporting. A hand lock on a
+      // DIFFERENT champ is the user exploring an alternative; it stays
+      // (lockPins gives it precedence over the client champ too).
+      if (allyLock.get(p.position) === p.championId) allyLock.delete(p.position);
       const cur = slots[i].champ;
       if (cur == null || cur === liveOursByRole[p.position] || cur === p.championId) {
         slots[i].champ = p.championId;
@@ -2660,10 +2668,20 @@ function renderRanked(results) {
     tr.addEventListener("click", () => applyComp(results[+tr.dataset.i])));
 }
 
+// Hand locks on champs that have since died (banned, taken, fearless-spent)
+// survive passive re-optimization so the user's pick is never yanked out from
+// under them — but an explicit Optimize click means "re-roll this board", and
+// that is the moment a dead lock is released.
+function releaseDeadLocks() {
+  for (const [role, cid] of [...allyLock])
+    if (draftUnavailable(cid)) allyLock.delete(role);
+}
+
 function runOptimize() {
   // both entry points to the full search are hidden while the lock is on;
   // this keeps any other path (keyboard, stale handler) honest
   if (rolesLocked()) return runOptimizeChamps();
+  releaseDeadLocks();
   const { fixed, pinPlayer } = lockPins();
   rankedTabs.overall = optimize(10, fixed, pinPlayer);
   if (!rankedTabs.overall.length) rankedTabs.overall = null;
@@ -2673,6 +2691,7 @@ function runOptimize() {
 }
 
 function runOptimizeChamps() {
+  releaseDeadLocks();
   rankedTabs.assigned = optimizeChamps(10, lockPins().fixed);
   if (rankedTabs.assigned) applyComp(rankedTabs.assigned[0]);
   activeTab = "assigned";
