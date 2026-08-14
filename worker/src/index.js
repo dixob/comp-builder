@@ -10,7 +10,8 @@
 //   GET  /data     -> {players, meta, profiles} exactly as the front-end expects
 //   POST /refresh  -> pull newest matches, merge, return {added, remaining, ...}
 //   POST /seed     -> replace KV state wholesale (x-admin-token: ADMIN_TOKEN)
-//   POST /draft    -> live champ-select state from lcu_bridge.py (admin token)
+//   POST /draft    -> live champ-select state from lcu_bridge.py (no auth —
+//                     see the route for why)
 //   GET  /draft    -> current champ-select state (strongly consistent)
 //   GET  /draft/ws -> WebSocket; sends current state on connect, then pushes
 //                     every update the moment the bridge posts it
@@ -289,7 +290,7 @@ export class DraftHub {
       if (draft) pair[1].send(draft);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
-    if (req.method === "POST") {  // auth already checked by the worker
+    if (req.method === "POST") {
       const draft = await req.json();
       // One bridge owns a live draft at a time. Several people leaving
       // lcu_bridge.py running is the normal case, and without this the page
@@ -459,10 +460,12 @@ export default {
       if (url.pathname === "/counters") return counters(env, url);
       if (url.pathname === "/fearless") return fearless(env, url);
       if (url.pathname === "/draft" || url.pathname === "/draft/ws") {
-        if (req.method === "POST" &&
-            (!env.ADMIN_TOKEN || req.headers.get("x-admin-token") !== env.ADMIN_TOKEN))
-          return json({ error: "forbidden" }, 403);
-        // one hub for the whole group — every client talks to the same instance
+        // Deliberately unauthenticated, unlike /seed: requiring the admin
+        // token here meant every new machine needed a secret copied by hand
+        // before its bridge worked. The draft feed is transient, low-stakes
+        // state — worst case someone who finds the URL posts a fake draft —
+        // and the DraftHub's single-owner arbitration already handles
+        // conflicting feeders.
         return env.DRAFT.get(env.DRAFT.idFromName("main")).fetch(req);
       }
       if (url.pathname === "/seed" && req.method === "POST") {

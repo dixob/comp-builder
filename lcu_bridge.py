@@ -10,8 +10,8 @@ second, and POSTs bans + picks to the Cloudflare worker whenever they change.
 With Draft mode on, the web page polls the worker and updates itself — bans
 and enemy picks drop out of candidate lists as they happen.
 
-Reads worker_url + admin_token from config.json (same directory); no
-third-party dependencies. The LCU API only listens on 127.0.0.1, so this must
+Reads worker_url from config.json (same directory); no third-party
+dependencies. The LCU API only listens on 127.0.0.1, so this must
 run locally — the web page cannot reach the client directly.
 """
 import base64
@@ -127,13 +127,15 @@ def extract_draft(session):
 
 
 def post_draft(worker_url, token, payload):
+    # Cloudflare's edge blocks urllib's default "Python-urllib/x.y" UA
+    # (HTTP 403, error 1010) — a normal-looking one clears it.
+    headers = {"content-type": "application/json", "user-agent": "lcu-bridge/1.0"}
+    if token:  # /draft stopped requiring auth; sent only for older workers
+        headers["x-admin-token"] = token
     req = urllib.request.Request(
         worker_url.rstrip("/") + "/draft",
         data=json.dumps(payload).encode(),
-        # Cloudflare's edge blocks urllib's default "Python-urllib/x.y" UA
-        # (HTTP 403, error 1010) — a normal-looking one clears it.
-        headers={"content-type": "application/json", "x-admin-token": token,
-                 "user-agent": "lcu-bridge/1.0"},
+        headers=headers,
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -147,9 +149,9 @@ def post_draft(worker_url, token, payload):
 def main():
     cfg = json.loads((ROOT / "config.json").read_text())
     worker_url = cfg.get("worker_url")
-    token = cfg.get("admin_token")
-    if not worker_url or not token:
-        sys.exit("config.json needs worker_url and admin_token for the bridge.")
+    token = cfg.get("admin_token")  # optional — /draft is unauthenticated
+    if not worker_url:
+        sys.exit("config.json needs worker_url for the bridge.")
 
     lock = find_lockfile()
     while not lock:
