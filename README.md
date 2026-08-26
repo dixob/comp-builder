@@ -13,6 +13,9 @@ It blends three signals to estimate a five-man comp's win rate:
   champ pairs (only games where those two players piloted those two
   champions themselves)
 
+The exact weights, shrinkage constants, and every adjustment term are
+documented in [SCORING.md](SCORING.md).
+
 A **Team profile** panel also reads the comp's shape — damage mix
 (physical/magic/true), frontline, and crowd control — from per-champion
 combat averages over the cached matches (`compute_profiles.py`). It's
