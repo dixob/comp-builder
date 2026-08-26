@@ -1187,7 +1187,8 @@ function candidates(riotId, role, n = 3) {
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
-    avail: !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid, role),
+    avail: !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid, role)
+      && !uniqueExclude.has(riotId + "|" + cid),
     // in strict Role WR mode "played" means played IN THIS ROLE — a champ
     // with a real sample elsewhere but none here drops out of the top tier
     played: (strictRole
@@ -1475,6 +1476,8 @@ function render() {
         </div>
         <div class="card" style="margin-top:18px">
           <h2 style="margin-bottom:14px"><span id="rankedHead">Top compositions</span>
+            <button class="btn toggle ${uniqueComps ? "active" : ""}" id="uniqueToggle" style="margin-left:10px"
+              title="Each comp only lists players on champs they don't already hold in a higher comp">No repeats</button>
             <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
@@ -1544,6 +1547,12 @@ function render() {
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
+  $("#uniqueToggle").addEventListener("click", () => {
+    uniqueComps = !uniqueComps;
+    localStorage.setItem("uniqueComps", uniqueComps ? "1" : "0");
+    $("#uniqueToggle").classList.toggle("active", uniqueComps);
+    renderTabs();  // pools are cached at RANKED_POOL depth — no recompute
+  });
   renderDraft();
   renderSlots();
   renderScore();
@@ -2609,6 +2618,37 @@ function profileHTML(cids) {
 const rankedTabs = { assigned: null, overall: null };
 let activeTab = "overall";
 
+// "No repeats": each comp on the list puts nobody on a champ they already
+// hold in a higher-ranked comp, so ten variations on one core become ten
+// genuinely different plans. Filtering the normal top-10 pool can't deliver
+// this (the whole pool shares its core picks), so the list is built by
+// re-running the optimizer once per row with the shown player+champ pairings
+// excluded. Locked picks bypass candidates(), so they rightly persist in
+// every row. Cached on the results array itself — replacing a tab's results
+// drops the cached view with it.
+const RANKED_TOP = 10;
+let uniqueComps = localStorage.getItem("uniqueComps") === "1";
+let uniqueExclude = new Set();  // "riotId|championId" pairs shown higher up the unique list
+function uniqueList(tab, results) {
+  const { fixed, pinPlayer } = lockPins();
+  const out = [results[0]];
+  try {
+    uniqueExclude = new Set(results[0].assign.map(a => a.player + "|" + a.champ));
+    candCache = {};
+    while (out.length < RANKED_TOP) {
+      const res = tab === "overall" ? optimize(1, fixed, pinPlayer) : optimizeChamps(1, fixed);
+      if (!res || !res.length) break;
+      out.push(res[0]);
+      for (const a of res[0].assign) uniqueExclude.add(a.player + "|" + a.champ);
+      candCache = {};
+    }
+  } finally {
+    uniqueExclude = new Set();  // never leak exclusions into normal scoring
+    candCache = {};
+  }
+  return out;
+}
+
 function switchTab(tab) {
   // A role-agnostic search contradicts a locked board, so while the lock is on
   // there is only one list — asking for "overall" gets the champs-only one.
@@ -2637,7 +2677,7 @@ function renderTabs() {
       : "Check at least 5 players."}</div>`;
     return;
   }
-  renderRanked(results);
+  renderRanked(uniqueComps ? (results.unique ??= uniqueList(activeTab, results)) : results);
 }
 
 function renderRanked(results) {
