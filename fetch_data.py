@@ -280,9 +280,11 @@ def main():
     # k/d/a are kill/death/assist sums; kg counts the games those sums cover —
     # equal to `games` here, but the worker merges incrementally onto records
     # that may predate these fields, so averages must divide by kg, not games.
+    # dmg is damage to champions; dsecs counts the seconds those sums cover
+    # (kg's honesty rule again — the worker merges onto older records).
     def champ_rec():
         return {"games": 0, "wins": 0, "cs": 0, "secs": 0,
-                "k": 0, "d": 0, "a": 0, "kg": 0,
+                "k": 0, "d": 0, "a": 0, "kg": 0, "dmg": 0, "dsecs": 0,
                 "roles": defaultdict(lambda: {"games": 0, "wins": 0})}
     champ_stats = defaultdict(lambda: defaultdict(
         lambda: champ_rec() | {"q": defaultdict(champ_rec)}))
@@ -355,6 +357,8 @@ def main():
                     s["d"] += p.get("deaths", 0)
                     s["a"] += p.get("assists", 0)
                     s["kg"] += 1
+                    s["dmg"] += p.get("totalDamageDealtToChampions", 0)
+                    s["dsecs"] += dur
                     r = s["roles"][pos]
                     r["games"] += 1
                     r["wins"] += p["win"]
@@ -366,6 +370,7 @@ def main():
                     "champ": p["championId"], "role": pos, "win": int(p["win"]),
                     "k": p.get("kills", 0), "d": p.get("deaths", 0),
                     "a": p.get("assists", 0), "cs": cs_val, "secs": dur,
+                    "dmg": p.get("totalDamageDealtToChampions", 0),
                 })
         for team_id in (100, 200):
             team = [p for p in parts if p["teamId"] == team_id]
@@ -404,7 +409,8 @@ def main():
     def rec_out(s):
         return {"games": s["games"], "wins": s["wins"], "cs": s["cs"],
                 "secs": s["secs"], "k": s["k"], "d": s["d"], "a": s["a"],
-                "kg": s["kg"], "roles": dict(s["roles"])}
+                "kg": s["kg"], "dmg": s["dmg"], "dsecs": s["dsecs"],
+                "roles": dict(s["roles"])}
 
     for p in players:
         p["champions"] = [

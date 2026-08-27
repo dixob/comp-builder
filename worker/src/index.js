@@ -129,6 +129,9 @@ function mergeMatch(state, m) {
       s.d = (s.d || 0) + (p.deaths || 0);
       s.a = (s.a || 0) + (p.assists || 0);
       s.kg = (s.kg || 0) + 1;
+      // damage/min sums; dsecs counts the seconds they cover (kg's rule)
+      s.dmg = (s.dmg || 0) + (p.totalDamageDealtToChampions || 0);
+      s.dsecs = (s.dsecs || 0) + dur;
       bump(s.roles[pos] ??= { games: 0, wins: 0 }, p.win);
     }
     bump(pl.queues[qid] ??= { games: 0, wins: 0 }, p.win);
@@ -139,6 +142,7 @@ function mergeMatch(state, m) {
       id: m.metadata.matchId, ts: endTs, q: qid, champ: p.championId,
       role: pos, win: p.win ? 1 : 0, k: p.kills || 0, d: p.deaths || 0,
       a: p.assists || 0, cs: csVal, secs: dur,
+      dmg: p.totalDamageDealtToChampions || 0,
     });
     pl.recent.sort((x, y) => y.ts - x.ts);
     if (pl.recent.length > 20) pl.recent.length = 20;
@@ -229,7 +233,8 @@ function deriveData(state) {
       champions: Object.entries(pl.champs)
         .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins,
           cs: s.cs || 0, secs: s.secs || 0, k: s.k || 0, d: s.d || 0,
-          a: s.a || 0, kg: s.kg || 0, roles: s.roles, q: s.q || {} }))
+          a: s.a || 0, kg: s.kg || 0, dmg: s.dmg || 0, dsecs: s.dsecs || 0,
+          roles: s.roles, q: s.q || {} }))
         .sort((a, b) => b.games - a.games),
       queues: pl.queues,
       recent: pl.recent || [],
