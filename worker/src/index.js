@@ -106,9 +106,26 @@ function mergeMatch(state, m) {
       bump(s, p.win);
       s.cs = (s.cs || 0) + csVal;
       s.secs = (s.secs || 0) + dur;
+      // KDA sums, with kg counting the games they cover: records seeded
+      // before these fields existed keep accumulating from here, and kg is
+      // what makes the averages honest (never divide by `games`)
+      s.k = (s.k || 0) + (p.kills || 0);
+      s.d = (s.d || 0) + (p.deaths || 0);
+      s.a = (s.a || 0) + (p.assists || 0);
+      s.kg = (s.kg || 0) + 1;
       bump(s.roles[pos] ??= { games: 0, wins: 0 }, p.win);
     }
     bump(pl.queues[qid] ??= { games: 0, wins: 0 }, p.win);
+    // slim history row for the profiles view, newest first, capped
+    const endTs = m.info.gameEndTimestamp
+      || (m.info.gameStartTimestamp || m.info.gameCreation || 0) + dur * 1000;
+    (pl.recent ??= []).push({
+      id: m.metadata.matchId, ts: endTs, q: qid, champ: p.championId,
+      role: pos, win: p.win ? 1 : 0, k: p.kills || 0, d: p.deaths || 0,
+      a: p.assists || 0, cs: csVal, secs: dur,
+    });
+    pl.recent.sort((x, y) => y.ts - x.ts);
+    if (pl.recent.length > 20) pl.recent.length = 20;
   }
 
   for (const teamId of [100, 200]) {
@@ -178,11 +195,14 @@ function deriveData(state) {
       riotId, puuid,
       profileIconId: pl.profileIconId,
       mastery: pl.mastery,
+      ranks: pl.ranks || null,  // seeded from the last fetch_data.py run
       champions: Object.entries(pl.champs)
         .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins,
-          cs: s.cs || 0, secs: s.secs || 0, roles: s.roles, q: s.q || {} }))
+          cs: s.cs || 0, secs: s.secs || 0, k: s.k || 0, d: s.d || 0,
+          a: s.a || 0, kg: s.kg || 0, roles: s.roles, q: s.q || {} }))
         .sort((a, b) => b.games - a.games),
       queues: pl.queues,
+      recent: pl.recent || [],
     };
   });
   return {

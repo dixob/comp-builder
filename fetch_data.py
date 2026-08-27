@@ -277,8 +277,12 @@ def main():
     # Per-player per-champion stats, split by role. cs/secs feed cs-per-minute.
     # "q" carries the same counters split by queue id so the front-end can
     # score on a single queue (flex-only toggle).
+    # k/d/a are kill/death/assist sums; kg counts the games those sums cover —
+    # equal to `games` here, but the worker merges incrementally onto records
+    # that may predate these fields, so averages must divide by kg, not games.
     def champ_rec():
         return {"games": 0, "wins": 0, "cs": 0, "secs": 0,
+                "k": 0, "d": 0, "a": 0, "kg": 0,
                 "roles": defaultdict(lambda: {"games": 0, "wins": 0})}
     champ_stats = defaultdict(lambda: defaultdict(
         lambda: champ_rec() | {"q": defaultdict(champ_rec)}))
@@ -298,6 +302,11 @@ def main():
     champ_pair_stats = defaultdict(lambda: {"games": 0, "wins": 0,
                                             "q": defaultdict(lambda: {"games": 0, "wins": 0})})
 
+    # Slim per-player match feed for the profiles view — newest RECENT_KEEP
+    # games with just what a history row renders.
+    RECENT_KEEP = 20
+    recent_games = defaultdict(list)
+
     # Only count matches newer than this — old games say little about current
     # form (the raw match stays cached either way).
     max_age_days = cfg.get("max_match_age_days", 365)
@@ -310,6 +319,8 @@ def main():
         if dur > 20000:  # pre-11.20 matches report milliseconds
             dur //= 1000
         qid = m["info"]["queueId"]
+        end_ts = (m["info"].get("gameEndTimestamp")
+                  or m["info"].get("gameStartTimestamp", 0) + dur * 1000)
         for p in parts:
             rid = puuid_to_player.get(p["puuid"])
             if rid:
@@ -321,12 +332,22 @@ def main():
                     s["wins"] += p["win"]
                     s["cs"] += cs_val
                     s["secs"] += dur
+                    s["k"] += p.get("kills", 0)
+                    s["d"] += p.get("deaths", 0)
+                    s["a"] += p.get("assists", 0)
+                    s["kg"] += 1
                     r = s["roles"][pos]
                     r["games"] += 1
                     r["wins"] += p["win"]
                 q = queue_stats[rid][qid]
                 q["games"] += 1
                 q["wins"] += p["win"]
+                recent_games[rid].append({
+                    "id": m["metadata"]["matchId"], "ts": end_ts, "q": qid,
+                    "champ": p["championId"], "role": pos, "win": int(p["win"]),
+                    "k": p.get("kills", 0), "d": p.get("deaths", 0),
+                    "a": p.get("assists", 0), "cs": cs_val, "secs": dur,
+                })
         for team_id in (100, 200):
             team = [p for p in parts if p["teamId"] == team_id]
             won = bool(team and team[0]["win"])
@@ -354,7 +375,8 @@ def main():
 
     def rec_out(s):
         return {"games": s["games"], "wins": s["wins"], "cs": s["cs"],
-                "secs": s["secs"], "roles": dict(s["roles"])}
+                "secs": s["secs"], "k": s["k"], "d": s["d"], "a": s["a"],
+                "kg": s["kg"], "roles": dict(s["roles"])}
 
     for p in players:
         p["champions"] = [
@@ -363,6 +385,8 @@ def main():
             for cid, s in sorted(champ_stats[p["riotId"]].items(), key=lambda kv: -kv[1]["games"])
         ]
         p["queues"] = {str(qid): s for qid, s in queue_stats[p["riotId"]].items()}
+        p["recent"] = sorted(recent_games[p["riotId"]],
+                             key=lambda g: -g["ts"])[:RECENT_KEEP]
         del p["matchIds"]
 
     out = {

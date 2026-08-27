@@ -616,6 +616,62 @@
   .bchip { padding: 3px; }
   .bchip img { width: 24px; height: 24px; border-radius: 6px; }
 
+  /* ---- profiles (pseudo op.gg) ---- */
+  .pf-switch { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .pf-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: inherit; font-size: 12px; line-height: 16px; font-weight: 500; cursor: pointer;
+    color: var(--text-secondary); background: var(--layer-2);
+    border: 1px solid var(--outline-variant); border-radius: 999px;
+    padding: 3px 10px 3px 4px;
+    transition: color 70ms var(--ease-standard), border-color 70ms var(--ease-standard);
+  }
+  .pf-chip img { width: 22px; height: 22px; border-radius: 50%; }
+  .pf-chip:hover { color: var(--text-primary); background: var(--hover-layer); }
+  .pf-chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+  .pf-head { display: flex; gap: var(--sp-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .pf-head .avatar { width: 56px; height: 56px; border-radius: 12px; }
+  .pf-name { font-size: 18px; font-weight: 600; line-height: 24px; }
+  .pf-name .tag { color: var(--text-muted); font-weight: 400; font-size: 13px; }
+  .pf-rankline { font-size: 12px; line-height: 18px; color: var(--text-secondary); }
+  .pf-rankline b { color: var(--text-primary); }
+  .pf-queues { margin-left: auto; display: grid; gap: 4px; min-width: 230px; }
+  .pf-qrow { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 16px; color: var(--text-secondary); }
+  .pf-qrow .qname { width: 86px; flex: none; }
+  .pf-qrow b { color: var(--text-primary); }
+  .pf-grid { display: grid; grid-template-columns: 3fr 2fr; gap: var(--sp-5); align-items: start; }
+  @media (max-width: 900px) { .pf-grid { grid-template-columns: 1fr; } .pf-queues { margin-left: 0; } }
+  .pf-sec h4 {
+    margin: 0 0 var(--sp-2); font-size: 11px; font-weight: 500; line-height: 16px;
+    letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
+  }
+  .pf-champ { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .pf-champ img { width: 28px; height: 28px; border-radius: 8px; }
+  .pf-champ svg { color: var(--text-muted); flex: none; }
+  .pf-kda { white-space: nowrap; }
+  .pf-kda b { font-weight: 600; }
+  .pf-kda .dim { color: var(--text-muted); }
+  .pf-duo { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: var(--layer-2); border-radius: 8px; margin-bottom: 4px; font-size: 12px; line-height: 16px; }
+  .pf-duo img { width: 26px; height: 26px; border-radius: 8px; }
+  .pf-duo .who { flex: 1; min-width: 0; }
+  .pf-duo .who b { display: block; font-size: 13px; }
+  .pf-duo .who span { color: var(--text-muted); font-size: 11px; }
+  .pf-mrow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 10px; background: var(--layer-2); border-radius: 8px;
+    margin-bottom: 4px; font-size: 12px; line-height: 16px;
+  }
+  .pf-mrow.win { box-shadow: inset 3px 0 0 var(--positive); }
+  .pf-mrow.loss { box-shadow: inset 3px 0 0 var(--negative); }
+  .pf-mrow img { width: 30px; height: 30px; border-radius: 8px; }
+  .pf-mrow .res { flex: none; width: 14px; font-weight: 600; }
+  .pf-mrow.win .res { color: var(--positive); }
+  .pf-mrow.loss .res { color: var(--negative); }
+  .pf-mrow .mname { min-width: 92px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .pf-mrow .mname svg { color: var(--text-muted); flex: none; }
+  .pf-mrow .dim { color: var(--text-muted); }
+  .pf-mrow .when { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
+
   /* ---- nightmare mode ----
      The whole page goes cold while the Nightmare blunt rotation tab is open:
      the same token system, possessed. Set on body (renderTabs toggles it), so
@@ -1717,6 +1773,7 @@ function render() {
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
               <button id="tabWorst" title="The inverse search: the worst realistic comp this roster could field — real picks for each lane, the worst records to pilot them">Nightmare blunt rotation</button>
+              <button id="tabProfiles" title="Pseudo op.gg: per-player profiles — ranks, roles, champion stats, duos, recent games">Profiles</button>
             </span>
           </h2>
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
@@ -1784,6 +1841,7 @@ function render() {
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
   $("#tabWorst").addEventListener("click", () => switchTab("worst"));
+  $("#tabProfiles").addEventListener("click", () => switchTab("profiles"));
   $("#uniqueToggle").addEventListener("click", () => {
     uniqueComps = !uniqueComps;
     localStorage.setItem("uniqueComps", uniqueComps ? "1" : "0");
@@ -1793,6 +1851,10 @@ function render() {
   renderDraft();
   renderSlots();
   renderScore();
+  // A full re-render (data refresh, flex toggle) resets #ranked to the empty
+  // state; optimizer tabs are left for an explicit re-run, but the profiles
+  // pane derives straight from D, so restoring it is free.
+  if (activeTab === "profiles") switchTab("profiles");
 }
 
 // --- draft card ------------------------------------------------------------
@@ -2850,9 +2912,158 @@ function profileHTML(cids) {
     </div>`;
 }
 
+// --- profiles (pseudo op.gg) ----------------------------------------------
+// Per-player profile pages built from the same dataset the optimizer scores
+// with: ranks, queue records, role distribution, champion stats (with meta
+// comparison), duo synergy, and — when the data pipeline has produced them —
+// KDA numbers and a recent-match feed. Rendered into #ranked like a fourth
+// result set; everything is derived from D at render time, so the flex-only
+// view and refreshes need no extra invalidation.
+let profilePlayer = null;
+
+const QUEUE_NAME = { "420": "Solo/duo", "440": "Flex", "700": "Clash", "710": "Clash" };
+
+function timeAgo(ts) {
+  const s = (Date.now() - ts) / 1000;
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  if (s < 7 * 86400) return Math.round(s / 86400) + "d ago";
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+// "4.1 / 2.9 / 6.0  2.4" — per-game averages plus the ratio. kg counts the
+// games the sums cover; on live data merged before the KDA fields existed it
+// can trail `games`, so the title says which slice the average is from.
+function kdaHTML(s) {
+  if (!s.kg) return `<span class="dim">—</span>`;
+  const ratio = ((s.k + s.a) / Math.max(1, s.d)).toFixed(2);
+  const partial = s.games && s.kg < s.games ? ` title="KDA from the newest ${s.kg} of ${s.games} games"` : "";
+  return `<span class="pf-kda"${partial}>${(s.k / s.kg).toFixed(1)} <span class="dim">/</span> ${(s.d / s.kg).toFixed(1)} <span class="dim">/</span> ${(s.a / s.kg).toFixed(1)} <b>${ratio}</b></span>`;
+}
+
+function rankLine(p) {
+  const out = [];
+  for (const q of ["420", "440"]) {
+    const r = (p.ranks || {})[q];
+    if (!r || !r.tier) continue;
+    const apex = APEX.has(r.tier);
+    const games = (r.wins || 0) + (r.losses || 0);
+    out.push(`${QUEUE_NAME[q]}: <b>${r.tier[0] + r.tier.slice(1).toLowerCase()}${apex ? "" : " " + r.division}</b> · ${r.lp} LP`
+      + (games ? ` · ${r.wins}W ${r.losses}L` : ""));
+  }
+  return out.join("<br>") || `<span class="dim">no rank data</span>`;
+}
+
+function renderProfilePane() {
+  if (!profilePlayer || !D.players.some(p => p.riotId === profilePlayer))
+    profilePlayer = D.players[0].riotId;
+  const p = D.players.find(x => x.riotId === profilePlayer);
+  const [name, tag] = p.riotId.split("#");
+
+  const chips = D.players.map(x => `<button type="button" class="pf-chip ${x.riotId === profilePlayer ? "active" : ""}" data-pf="${x.riotId}">
+      ${avatar(x.riotId)}${x.riotId.split("#")[0]}</button>`).join("");
+
+  const queues = Object.entries(p.queues || {}).sort(([a], [b]) => a - b)
+    .map(([qid, s]) => `<div class="pf-qrow"><span class="qname">${QUEUE_NAME[qid] || "Queue " + qid}</span>
+      <b>${pct(s.wins / s.games)}</b><div class="wr-bar"><div style="width:${s.wins / s.games * 100}%"></div></div>
+      <span>${s.wins}W ${s.games - s.wins}L</span></div>`).join("");
+
+  const roleRows = ROLES.map(r => {
+    const share = playerRoleShare(p.riotId, r);
+    return `<div class="prow"><span class="plabel">${ROLE_LABEL[r]}</span>
+      <span class="pmeter"><div style="width:${share * 100}%"></div></span>
+      <span class="pstatus">${Math.round(share * 100)}%</span></div>`;
+  }).join("");
+
+  const mainRole = e => Object.entries(e.roles).sort((a, b) => b[1].games - a[1].games)[0]?.[0];
+  const champRows = p.champions.slice(0, 10).map(e => {
+    const wr = e.wins / e.games;
+    const role = mainRole(e);
+    let metaChip = `<span class="dim">—</span>`;
+    if (META && e.games >= 5 && role && role !== "UNKNOWN") {
+      const d = wr - metaWR(e.championId, role);
+      metaChip = `<span class="syn-chip ${d >= 0 ? "pos" : "neg"}" title="win rate vs the champ's current-patch meta WR in ${ROLE_LABEL[role]}">${d >= 0 ? "▲ +" : "▼ "}${(d * 100).toFixed(1)}pp</span>`;
+    }
+    return `<tr>
+      <td><span class="pf-champ"><img src="${champIcon(e.championId)}" alt="">${champName(e.championId)}${role && ROLE_ICON[role] ? ROLE_ICON[role] : ""}</span></td>
+      <td>${e.games}g</td>
+      <td><div class="wr-cell"><b>${pct(wr)}</b><div class="wr-bar"><div style="width:${wr * 100}%"></div></div></div></td>
+      <td>${kdaHTML(e)}</td>
+      <td>${e.secs ? (e.cs / (e.secs / 60)).toFixed(1) : "—"}</td>
+      <td>${metaChip}</td>
+    </tr>`;
+  }).join("");
+  const moreChamps = Math.max(0, p.champions.length - 10);
+
+  const duos = Object.values(playerPairIdx)
+    .filter(s => s.a === p.riotId || s.b === p.riotId)
+    .sort((x, y) => y.games - x.games)
+    .map(s => {
+      const partner = s.a === p.riotId ? s.b : s.a;
+      const wr = s.wins / s.games;
+      const best = Object.entries(s.roles || {}).filter(([k]) => !k.includes("UNKNOWN"))
+        .sort((x, y) => y[1].games - x[1].games)[0];
+      let combo = "";
+      if (best) {
+        const [ra, rb] = best[0].split("|");
+        const [mine, theirs] = s.a === p.riotId ? [ra, rb] : [rb, ra];
+        combo = `${ROLE_LABEL[mine]} + ${ROLE_LABEL[theirs]} · ${best[1].games}g`;
+      }
+      const d = wr - 0.5;
+      return `<div class="pf-duo">${avatar(partner)}
+        <span class="who"><b>${partner.split("#")[0]}</b><span>${s.games} games together${combo ? " · best as " + combo : ""}</span></span>
+        <b>${pct(wr)}</b>
+        <span class="syn-chip ${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "▲ +" : "▼ "}${(d * 100).toFixed(1)}pp</span>
+      </div>`;
+    }).join("") || `<div class="hint">no shared games recorded</div>`;
+
+  const recentRows = (p.recent || []).map(g => `<div class="pf-mrow ${g.win ? "win" : "loss"}">
+      <span class="res">${g.win ? "W" : "L"}</span>
+      <img src="${champIcon(g.champ)}" alt="">
+      <span class="mname">${champName(g.champ)}${ROLE_ICON[g.role] || ""}</span>
+      ${kdaHTML({ k: g.k, d: g.d, a: g.a, kg: 1 })}
+      <span class="dim">${g.secs ? (g.cs / (g.secs / 60)).toFixed(1) + " cs/m" : ""} · ${Math.round(g.secs / 60)}min · ${QUEUE_NAME[g.q] || QUEUE_NAME[String(g.q)] || "q" + g.q}</span>
+      <span class="when">${timeAgo(g.ts)}</span>
+    </div>`).join("");
+
+  $("#ranked").innerHTML = `
+    <div class="pf-switch">${chips}</div>
+    <div class="pf-head">
+      ${avatar(p.riotId)}
+      <div>
+        <div class="pf-name">${name} <span class="tag">#${tag || ""}</span></div>
+        <div class="pf-rankline">${rankLine(p)}</div>
+      </div>
+      <div class="pf-queues">${queues || `<span class="hint">no ranked games</span>`}</div>
+    </div>
+    <div class="pf-grid">
+      <div class="pf-sec">
+        <h4>Champions${flexOnly ? " (flex only)" : ""}</h4>
+        <table>
+          <tr><th>Champ</th><th>Games</th><th>Win rate</th><th>KDA</th><th>CS/m</th><th>vs meta</th></tr>
+          ${champRows}
+        </table>
+        ${moreChamps ? `<div class="hint" style="margin-top:6px">+ ${moreChamps} more champs with games</div>` : ""}
+      </div>
+      <div>
+        <div class="pf-sec" style="margin-bottom:var(--sp-4)"><h4>Role distribution</h4>${roleRows}</div>
+        <div class="pf-sec"><h4>Plays with</h4>${duos}</div>
+      </div>
+    </div>
+    <div class="pf-sec" style="margin-top:var(--sp-5)">
+      <h4>Recent games${flexOnly ? " (flex only)" : ""}</h4>
+      ${recentRows || `<div class="hint">No recent-game feed in this dataset yet — it arrives with the next data refresh.</div>`}
+    </div>`;
+  document.querySelectorAll("[data-pf]").forEach(b => b.addEventListener("click", () => {
+    profilePlayer = b.dataset.pf;
+    renderProfilePane();
+  }));
+}
+
 // Three result sets: champs-only for the roles set in the slots, the full
 // role-agnostic search, and the nightmare blunt rotation (the same search
-// minimized). Tabs switch the view without touching the slots.
+// minimized). Tabs switch the view without touching the slots; the Profiles
+// tab renders the pseudo-op.gg pane instead of a result list.
 const rankedTabs = { assigned: null, overall: null, worst: null };
 let activeTab = "overall";
 
@@ -2894,7 +3105,7 @@ function switchTab(tab) {
   // there is only one list — asking for "overall" gets the champs-only one.
   if (rolesLocked()) tab = "assigned";
   activeTab = tab;
-  if (!rankedTabs[tab]) {
+  if (tab !== "profiles" && !rankedTabs[tab]) {
     const res = tab === "overall" ? optimize(10)
       : tab === "worst" ? optimizeWorst(10)
       : optimizeChamps(10);
@@ -2978,10 +3189,15 @@ function renderTabs() {
         that lane, or one the player has a genuine in-role sample on — so this isn't "ADC in the
         jungle", it's the champs and role swaps this group demonstrably loses with. Filters and
         bans still apply. #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
+    : activeTab === "profiles" ? "Player profiles"
       : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   $("#tabWorst").classList.toggle("active", activeTab === "worst");
+  $("#tabProfiles").classList.toggle("active", activeTab === "profiles");
+  // "No repeats" governs result lists; it means nothing on a profile page
+  $("#uniqueToggle").hidden = !locked && activeTab === "profiles";
+  if (!locked && activeTab === "profiles") { renderProfilePane(); return; }
   const results = rankedTabs[activeTab];
   if (!results) {
     $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${activeTab === "assigned"
@@ -3081,9 +3297,11 @@ function flexView(src) {
       champions: p.champions.map(c => {
         const f = c.q && c.q["440"];
         return f && f.games ? { championId: c.championId, games: f.games, wins: f.wins,
-          cs: f.cs || 0, secs: f.secs || 0, roles: f.roles || {} } : null;
+          cs: f.cs || 0, secs: f.secs || 0, k: f.k || 0, d: f.d || 0, a: f.a || 0,
+          kg: f.kg || 0, roles: f.roles || {} } : null;
       }).filter(Boolean).sort((a, b) => b.games - a.games),
       queues: Object.fromEntries(Object.entries(p.queues || {}).filter(([q]) => q === "440")),
+      recent: (p.recent || []).filter(g => g.q === 440),
     })),
     playerPairs: src.playerPairs.map(pp => {
       const f = pp.q && pp.q["440"];
