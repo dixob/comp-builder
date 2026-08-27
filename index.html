@@ -616,6 +616,119 @@
   .bchip { padding: 3px; }
   .bchip img { width: 24px; height: 24px; border-radius: 6px; }
 
+  /* ---- nightmare mode ----
+     The whole page goes cold while the Nightmare blunt rotation tab is open:
+     the same token system, possessed. Set on body (renderTabs toggles it), so
+     the haunted values override both themes for everything inside the page.
+     The global reduced-motion rule caps every animation here to 1ms. */
+  body.nightmare {
+    color-scheme: dark;
+    --surface: #0a0b10;
+    --layer-1: #12141c;
+    --layer-2: #1a1d29;
+    --layer-3: #242838;
+    --text-primary: #cfd9d3;
+    --text-secondary: #8d9c92;
+    --text-muted: #6d7b72;
+    --accent: #6fe3a5;
+    --on-accent: #06130c;
+    --enemy: #d96a4a;
+    --positive: #57c78a;
+    --negative: #ff5d5d;
+    --warning: #d8b34a;
+    --outline: #4c5661;
+    --outline-variant: #2a2e3d;
+    --focus: #9df0c6;
+    --accent-dim: rgba(111, 227, 165, 0.14);
+    --positive-dim: rgba(87, 199, 138, 0.12);
+    --negative-dim: rgba(255, 93, 93, 0.14);
+    --enemy-dim: rgba(217, 106, 74, 0.14);
+    --warning-dim: rgba(216, 179, 74, 0.12);
+    --hover-layer: rgba(207, 217, 211, 0.07);
+    --elev-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --elev-md: 0 4px 8px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.6);
+    --elev-lg: 0 12px 28px rgba(0, 0, 0, 0.65);
+  }
+  /* fog: three faint plumes drifting over everything; oversized so the drift
+     never exposes an edge. pointer-events off — it's weather, not UI. */
+  body.nightmare::before {
+    content: ""; position: fixed; inset: -20%; z-index: 30; pointer-events: none;
+    background:
+      radial-gradient(40% 30% at 25% 30%, rgba(140, 170, 160, 0.10), transparent 70%),
+      radial-gradient(50% 35% at 75% 65%, rgba(120, 150, 175, 0.08), transparent 70%),
+      radial-gradient(35% 28% at 55% 12%, rgba(150, 140, 185, 0.07), transparent 70%);
+    animation: fogdrift 26s ease-in-out infinite alternate;
+  }
+  @keyframes fogdrift {
+    from { transform: translate3d(-4%, -2%, 0); }
+    to   { transform: translate3d(4%, 3%, 0); }
+  }
+  /* vignette: the edges of the screen fall away into the dark */
+  body.nightmare::after {
+    content: ""; position: fixed; inset: 0; z-index: 31; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 40%, transparent 58%, rgba(2, 3, 6, 0.6) 100%);
+  }
+  body.nightmare h1, body.nightmare h2 { text-shadow: 0 0 16px var(--accent-dim); }
+  /* the heading is a failing lamp — steps(1) makes the drops instant */
+  body.nightmare #rankedHead { animation: flicker 5s steps(1) infinite; }
+  @keyframes flicker {
+    0%, 100% { opacity: 1; }
+    88% { opacity: 1; } 89% { opacity: 0.35; } 90% { opacity: 1; }
+    93% { opacity: 0.6; } 94% { opacity: 1; }
+  }
+  /* everyone on the page is a ghost of themselves; hovering a comp's champ
+     briefly brings them back to life */
+  body.nightmare .ci img, body.nightmare .portrait, body.nightmare .avatar,
+  body.nightmare .rpin img, body.nightmare .dchip img {
+    filter: grayscale(0.75) brightness(0.8) sepia(0.2) hue-rotate(130deg);
+  }
+  body.nightmare .ci:hover img { filter: none; }
+  .ghost {
+    display: inline-block;
+    animation: ghostfloat 3s ease-in-out infinite;
+  }
+  @keyframes ghostfloat { 50% { transform: translateY(-3px); } }
+  /* Extra fog sheets and the drifting figures live in #hauntLayer, a fixed
+     overlay setHaunt() creates when the tab opens and removes when it closes.
+     It sits UNDER the body fog/vignette (z 30/31) so the mist veils the
+     figures as they pass; everything is pointer-events-none decoration. */
+  #hauntLayer { position: fixed; inset: 0; z-index: 29; pointer-events: none; overflow: hidden; }
+  #hauntLayer::before, #hauntLayer::after { content: ""; position: absolute; inset: -25%; }
+  #hauntLayer::before {
+    background:
+      radial-gradient(45% 30% at 20% 65%, rgba(150, 175, 168, 0.13), transparent 70%),
+      radial-gradient(55% 35% at 80% 25%, rgba(130, 155, 175, 0.10), transparent 70%);
+    animation: fogdrift 19s ease-in-out infinite alternate-reverse;
+  }
+  #hauntLayer::after {
+    /* ground fog pooling along the bottom of the screen */
+    background:
+      linear-gradient(to top, rgba(150, 172, 165, 0.13), transparent 30%),
+      radial-gradient(60% 25% at 40% 96%, rgba(160, 180, 172, 0.14), transparent 70%);
+    animation: fogdrift 33s ease-in-out infinite alternate;
+  }
+  .specter {
+    position: absolute; width: calc(46px * var(--sc, 1));
+    opacity: 0; filter: blur(1.5px); color: #d3e8dc;
+    animation: specterdrift var(--dur, 14s) linear forwards;
+    will-change: transform, opacity;
+  }
+  .specter svg { display: block; width: 100%; height: auto; animation: specterbob 2.8s ease-in-out infinite; }
+  .specter.flip svg { --fx: -1; }
+  /* the shade: taller, darker, slower — mostly a shape you almost saw */
+  .specter.shade { width: calc(34px * var(--sc, 1)); color: #05070c; filter: blur(2.5px); }
+  @keyframes specterdrift {
+    0% { transform: translateX(0); opacity: 0; }
+    6% { opacity: var(--op, 0.4); }
+    86% { opacity: var(--op, 0.4); }
+    100% { transform: translateX(var(--dx, 130vw)); opacity: 0; }
+  }
+  /* scaleX carries the facing flip so the bob never fights it */
+  @keyframes specterbob {
+    0%, 100% { transform: scaleX(var(--fx, 1)) translateY(0) rotate(-2deg); }
+    50% { transform: scaleX(var(--fx, 1)) translateY(-10px) rotate(2deg); }
+  }
+
   /* ---- misc ---- */
   .empty { padding: 44px 20px; text-align: center; color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
   .empty svg { color: var(--outline-variant); margin-bottom: 10px; }
@@ -1331,9 +1444,12 @@ function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
 // filters, same scoring model, every comparison flipped.
 
 // Anti-candidates: the lowest-scoring champs a player could take into a role.
-// The mastery/games ranges and draft availability still apply (the nightmare
-// is still a comp the board would accept), but there are no viability tiers —
-// an off-meta lane with a losing record is exactly what this list is for.
+// The mastery/games ranges and draft availability still apply, and so does
+// roleViable — without it the "worst" comp is just five champs shoved into
+// lanes nobody plays them in (Miss Fortune jungle), which is trivially bad
+// and tells you nothing. Gated to real drafts, the nightmare is made of picks
+// that actually happen: champs the meta plays in that lane (or the player has
+// a genuine in-role sample on), chosen for the worst records this roster has.
 // Shares candCache (distinct key prefix) so every existing cache clear works.
 function worstCandidates(riotId, role, n = 3) {
   const ck = "worst|" + riotId + "|" + role + "|" + n;
@@ -1345,12 +1461,21 @@ function worstCandidates(riotId, role, n = 3) {
   const scored = [...pool.keys()].map(cid => ({
     cid,
     s: slotScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
     inRange: inGamesRange((pool.get(cid) || {}).games || 0),
   })).filter(c => !draftUnavailable(c.cid) && !counterAvoid.has(c.cid)
     && !uniqueExclude.has(riotId + "|" + c.cid));
-  const filtered = scored.filter(c => c.mastered && c.inRange);
-  const list = (filtered.length ? filtered : scored).sort((a, b) => a.s - b.s);
+  const eligible = scored.filter(c => c.mastered && c.inRange);
+  // degrade like candidates() does — viability outranks the pref filters, so
+  // the list only ever leaves realistic drafts when the player has none
+  const tiers = [
+    eligible.filter(c => c.viable),
+    scored.filter(c => c.viable),
+    eligible,
+    scored,
+  ];
+  const list = (tiers.find(t => t.length) || []).sort((a, b) => a.s - b.s);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
 }
 
@@ -1591,7 +1716,7 @@ function render() {
             <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
-              <button id="tabWorst" title="The inverse search: the worst comp this roster could legally field — worst champs on worst roles">Nightmare blunt rotation</button>
+              <button id="tabWorst" title="The inverse search: the worst realistic comp this roster could field — real picks for each lane, the worst records to pilot them">Nightmare blunt rotation</button>
             </span>
           </h2>
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
@@ -2778,20 +2903,81 @@ function switchTab(tab) {
   renderTabs();
 }
 
+// --- haunt layer -----------------------------------------------------------
+// Figures drifting across the screen while nightmare mode is on: mostly pale
+// specters, the occasional tall shade with red eyes. Spawned on a jittered
+// timer into #hauntLayer (which also carries the extra fog sheets), each one
+// removed when its drift finishes. Purely decorative: aria-hidden and
+// pointer-events none, and reduced-motion collapses the drift to 1ms so the
+// figures never actually appear.
+const SPECTER_SVG = `<svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+  <path fill="currentColor" d="M32 5C19 5 11 16 11 29v26l7.5-6.5L25 56l7-6.5L39 56l6.5-7.5L53 55V29C53 16 45 5 32 5z"/>
+  <circle cx="24.5" cy="27" r="3.4" fill="#06080d"/>
+  <circle cx="39.5" cy="27" r="3.4" fill="#06080d"/>
+  <ellipse cx="32" cy="37" rx="3" ry="4.6" fill="#06080d" opacity=".8"/>
+</svg>`;
+const SHADE_SVG = `<svg viewBox="0 0 40 96" fill="none" aria-hidden="true">
+  <circle cx="20" cy="13" r="8.5" fill="currentColor"/>
+  <path fill="currentColor" d="M20 20c-9 0-13 8-13.5 16L3 92c5.5-6 9.5-6 12.5-1 2-5 7-5 9 0 3-5 7-5 12.5 1l-3.5-56C33 28 29 20 20 20z"/>
+  <circle cx="16.5" cy="12" r="1.7" fill="#ff5d5d" opacity=".85"/>
+  <circle cx="23.5" cy="12" r="1.7" fill="#ff5d5d" opacity=".85"/>
+</svg>`;
+let hauntTimer = null;
+function spawnSpecter() {
+  const layer = $("#hauntLayer");
+  if (!layer || document.hidden) return;
+  const shade = Math.random() < 0.25;
+  const ltr = Math.random() < 0.5;
+  const el = document.createElement("div");
+  el.className = "specter" + (shade ? " shade" : "") + (ltr ? "" : " flip");
+  el.style.setProperty("--dur", ((shade ? 19 : 11) + Math.random() * 8).toFixed(1) + "s");
+  el.style.setProperty("--op", (shade ? 0.5 : 0.3 + Math.random() * 0.25).toFixed(2));
+  el.style.setProperty("--sc", (shade ? 1 + Math.random() * 0.5 : 0.7 + Math.random() * 0.9).toFixed(2));
+  el.style.setProperty("--dx", (ltr ? "" : "-") + "130vw");
+  el.style.top = 4 + Math.random() * 68 + "vh";
+  el.style[ltr ? "left" : "right"] = "-14vw";
+  el.innerHTML = shade ? SHADE_SVG : SPECTER_SVG;
+  // the inner bob loops forever — only the drift ending removes the figure
+  el.addEventListener("animationend", e => { if (e.target === el) el.remove(); });
+  layer.appendChild(el);
+}
+function setHaunt(on) {
+  const layer = $("#hauntLayer");
+  if (on && !layer) {
+    const l = document.createElement("div");
+    l.id = "hauntLayer";
+    l.setAttribute("aria-hidden", "true");
+    document.body.appendChild(l);
+    spawnSpecter();
+    const tick = () => { hauntTimer = setTimeout(() => { spawnSpecter(); tick(); }, 3500 + Math.random() * 4500); };
+    tick();
+  } else if (!on && layer) {
+    clearTimeout(hauntTimer);
+    hauntTimer = null;
+    layer.remove();
+  }
+}
+
 function renderTabs() {
   const locked = rolesLocked();
+  // the nightmare haunts the whole page, not just the list — see the
+  // "nightmare mode" style block; the drifting figures ride the same switch
+  const nightmare = !locked && activeTab === "worst";
+  document.body.classList.toggle("nightmare", nightmare);
+  setHaunt(nightmare);
   // Locked leaves exactly one list, so the whole switcher goes — a lone tab
   // chip that can't be switched away from is a dead control. The heading
   // carries the meaning instead.
   $("#rankedTabs").hidden = locked;
   $("#rankedHead").innerHTML = locked ? "Top comps for these roles"
     : activeTab === "worst"
-      ? `Nightmare blunt rotation<span class="info" tabindex="0">i<span class="tip">
-        The optimizer in reverse: the worst comps this roster could legally field — every player
-        on their lowest-scoring champion in their least suitable role, judged by the exact same
-        model as the top comps (win rates shrunk toward the meta, mastery, role comfort, synergy).
-        The mastery/games filters and any bans still apply, so each row is a real, pickable comp.
-        #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
+      ? `<span class="ghost" aria-hidden="true">👻</span> Nightmare blunt rotation<span class="info" tabindex="0">i<span class="tip">
+        The optimizer in reverse: the worst realistic comps this roster could field, judged by
+        the exact same model as the top comps (win rates shrunk toward the meta, mastery, role
+        comfort, synergy). Every pick is still a real draft — a champ the meta actually plays in
+        that lane, or one the player has a genuine in-role sample on — so this isn't "ADC in the
+        jungle", it's the champs and role swaps this group demonstrably loses with. Filters and
+        bans still apply. #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
       : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
