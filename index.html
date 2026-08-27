@@ -176,15 +176,6 @@
   .player .name { display: block; font-size: 14px; font-weight: 600;
                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .player .tag { display: block; font-size: 11px; line-height: 16px; color: var(--text-muted); }
-  /* the row badge shares its class name with the comps table's numbered
-     circle (.rank below) — undo the circle geometry here or the tier text
-     renders as a clipped 24px blob */
-  .player .rank {
-    display: inline; width: auto; height: auto;
-    background: none; border-radius: 0;
-    color: var(--text-secondary); font-weight: 600; font-size: 11px;
-  }
-  .player .rank::before { content: "·"; margin: 0 4px; color: var(--text-muted); font-weight: 400; }
   .qsplit { flex: none; text-align: right; font-size: 11px; line-height: 16px; color: var(--text-secondary); white-space: nowrap; }
   .qsplit .q { color: var(--text-muted); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; }
 
@@ -1678,24 +1669,9 @@ function avatar(riotId) {
   return `<img class="avatar" src="${url}" alt="">`;
 }
 
-// Ranked tier from league-v4. The flex-only toggle scores flex games, so it
-// shows the flex rank — otherwise solo is the headline and flex is the
-// fallback for someone who only queues flex.
-const TIER_SHORT = { IRON: "I", BRONZE: "B", SILVER: "S", GOLD: "G", PLATINUM: "P",
-  EMERALD: "E", DIAMOND: "D", MASTER: "M", GRANDMASTER: "GM", CHALLENGER: "C" };
+// Apex tiers carry LP instead of a division — the profiles rank line needs
+// to know which is which.
 const APEX = new Set(["MASTER", "GRANDMASTER", "CHALLENGER"]);
-function rankLabel(p) {
-  const order = flexOnly ? ["440", "420"] : ["420", "440"];
-  for (const q of order) {
-    const r = (p.ranks || {})[q];
-    if (!r || !r.tier) continue;
-    const short = TIER_SHORT[r.tier] || r.tier[0];
-    const badge = APEX.has(r.tier) ? `${short}${r.lp}` : `${short}${r.division || ""}`;
-    const full = `${r.tier[0] + r.tier.slice(1).toLowerCase()}${APEX.has(r.tier) ? "" : " " + r.division} · ${r.lp} LP`;
-    return `<span class="rank" title="${q === "420" ? "Solo/duo" : "Flex"} — ${full}">${badge}</span>`;
-  }
-  return "";
-}
 
 const ROLE_ICON = {
   TOP: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h13l-4.5 4.5h-4v4L3 16z"/><path opacity=".35" d="M21 21H8l4.5-4.5h4v-4L21 8z"/></svg>`,
@@ -1781,7 +1757,7 @@ function render() {
             return `<label class="player">
               <input type="checkbox" data-player="${p.riotId}" ${included[p.riotId] ? "checked" : ""}>
               ${avatar(p.riotId)}
-              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}${rankLabel(p)}<span data-notes="${p.riotId}">${playerNotes(p)}</span></span></span>
+              <span class="who"><span class="name">${name}</span><span class="tag">#${tag || ""}<span data-notes="${p.riotId}">${playerNotes(p)}</span></span></span>
               <span class="qsplit">${split}</span>
             </label>`;
           }).join("")}
