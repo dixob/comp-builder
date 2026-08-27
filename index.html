@@ -647,7 +647,15 @@
   .pf-qrow .qname { width: 86px; flex: none; }
   .pf-qrow b { color: var(--text-primary); }
   .pf-grid { display: grid; grid-template-columns: 3fr 2fr; gap: var(--sp-5); align-items: start; }
-  @media (max-width: 900px) { .pf-grid { grid-template-columns: 1fr; } .pf-queues { margin-left: 0; } }
+  /* grid children refuse to shrink below their content by default, and the
+     champ table's nowrap cells would shove the right column off-screen —
+     let the columns shrink and let the table scroll inside its own lane */
+  .pf-grid > * { min-width: 0; }
+  .pf-sec { overflow-x: auto; }
+  /* the pane lives in the ranked-card COLUMN (~560px at a 1024 viewport), so
+     the two-column grid needs the viewport to be comfortably wide, not just
+     desktop-sized — collapse well before the layout itself goes single-column */
+  @media (max-width: 1200px) { .pf-grid { grid-template-columns: 1fr; } .pf-queues { margin-left: 0; } }
   .pf-sec h4 {
     margin: 0 0 var(--sp-2); font-size: 11px; font-weight: 500; line-height: 16px;
     letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
@@ -2412,7 +2420,11 @@ function draftChanged(rerenderCard = true) {
   if (rerenderCard) renderDraft();
   renderSlots();
   renderScore();
-  if (had[activeTab]) switchTab(activeTab);
+  // The profiles pane isn't a result set (no `had` entry) but must still
+  // follow draft-state changes: switchTab re-renders it, and — when a lock
+  // toggle just made the tab strip disappear — coerces it to the one list
+  // the locked board allows.
+  if (activeTab === "profiles" || had[activeTab]) switchTab(activeTab);
 }
 
 // Match a live teammate to one of our tracked players by Riot ID (case-
