@@ -52,6 +52,9 @@ def main():
         p["riotId"]: {
             "profileIconId": p.get("profileIconId"),
             "mastery": p["mastery"],
+            # rank as of the last fetch_data.py run — the worker never calls
+            # league-v4, so this goes stale until the next reseed
+            "ranks": p.get("ranks"),
             "champs": {}, "queues": {},
         }
         for p in src["players"]
@@ -62,6 +65,23 @@ def main():
     champ_pairs = defaultdict(lambda: {"games": 0, "wins": 0, "q": {}})
     profile_sums = defaultdict(lambda: {k: 0 for k in PROFILE_FIELDS} | {"games": 0})
     processed = []
+    # full five-stack games, both scoreboards — the match-history tab's feed
+    stacks = []
+
+    def scoreboard_row(p, rid=None):
+        row = {
+            "champ": p["championId"],
+            "role": p.get("teamPosition") or "UNKNOWN",
+            "k": p.get("kills", 0), "d": p.get("deaths", 0), "a": p.get("assists", 0),
+            "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
+            "dmg": p.get("totalDamageDealtToChampions", 0),
+            "gold": p.get("goldEarned", 0),
+        }
+        if rid:
+            row["rid"] = rid
+        else:
+            row["name"] = p.get("riotIdGameName") or p.get("summonerName") or "?"
+        return row
 
     skipped_old = 0
     for f in sorted(glob.glob(str(ROOT / "data" / "matches" / "*.json"))):
@@ -86,23 +106,39 @@ def main():
             if not rid:
                 continue
             pl = players[rid]
+            # k/d/a sums with kg counting the games they cover — mirrors the
+            # worker, whose old records may predate these fields (see there)
             c = pl["champs"].setdefault(str(p["championId"]),
                                         {"games": 0, "wins": 0, "cs": 0, "secs": 0,
+                                         "k": 0, "d": 0, "a": 0, "kg": 0,
                                          "roles": {}, "q": {}})
             pos = p.get("teamPosition") or "UNKNOWN"
             cs_val = p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
             for s in (c, c["q"].setdefault(qid, {"games": 0, "wins": 0, "cs": 0,
-                                                 "secs": 0, "roles": {}})):
+                                                 "secs": 0, "k": 0, "d": 0, "a": 0,
+                                                 "kg": 0, "roles": {}})):
                 s["games"] += 1
                 s["wins"] += p["win"]
                 s["cs"] += cs_val
                 s["secs"] += dur
+                s["k"] += p.get("kills", 0)
+                s["d"] += p.get("deaths", 0)
+                s["a"] += p.get("assists", 0)
+                s["kg"] += 1
                 r = s["roles"].setdefault(pos, {"games": 0, "wins": 0})
                 r["games"] += 1
                 r["wins"] += p["win"]
             q = pl["queues"].setdefault(qid, {"games": 0, "wins": 0})
             q["games"] += 1
             q["wins"] += p["win"]
+            end_ts = (m["info"].get("gameEndTimestamp")
+                      or m["info"].get("gameStartTimestamp", 0) + dur * 1000)
+            pl.setdefault("recent", []).append({
+                "id": m["metadata"]["matchId"], "ts": end_ts, "q": int(qid),
+                "champ": p["championId"], "role": pos, "win": int(p["win"]),
+                "k": p.get("kills", 0), "d": p.get("deaths", 0),
+                "a": p.get("assists", 0), "cs": cs_val, "secs": dur,
+            })
 
         for team_id in (100, 200):
             team = [p for p in parts if p["teamId"] == team_id]
@@ -111,6 +147,15 @@ def main():
                 continue
             won = int(bool(team[0]["win"]))
             tracked.sort(key=lambda p: (rid_of[p["puuid"]], p["championId"]))
+            if len(tracked) == 5:
+                stacks.append({
+                    "id": m["metadata"]["matchId"],
+                    "ts": (m["info"].get("gameEndTimestamp")
+                           or m["info"].get("gameStartTimestamp", 0) + dur * 1000),
+                    "q": int(qid), "secs": dur, "win": won,
+                    "us": [scoreboard_row(p, rid_of[p["puuid"]]) for p in tracked],
+                    "them": [scoreboard_row(p) for p in parts if p["teamId"] != team_id],
+                })
             for i in range(len(tracked)):
                 for j in range(i + 1, len(tracked)):
                     pi, pj = tracked[i], tracked[j]
@@ -132,6 +177,11 @@ def main():
                         s["games"] += 1
                         s["wins"] += won
 
+    # newest RECENT_KEEP games per player — the profiles view's match feed
+    RECENT_KEEP = 20
+    for pl in players.values():
+        pl["recent"] = sorted(pl.get("recent", []), key=lambda g: -g["ts"])[:RECENT_KEEP]
+
     state = {
         "config": {
             "platform": cfg["platform"],
@@ -141,6 +191,7 @@ def main():
                         for p in src["players"]],
         },
         "players": players,
+        "stacks": sorted(stacks, key=lambda g: -g["ts"]),
         "playerPairs": dict(player_pairs),
         "champPairs": dict(champ_pairs),
         "profileSums": {str(k): v for k, v in profile_sums.items()},
@@ -155,7 +206,7 @@ def main():
     print(f"Wrote {out.relative_to(ROOT)} — {len(processed)} matches "
           f"({skipped_old} older than {max_age_days}d skipped), "
           f"{len(players)} players, {len(champ_pairs)} champ pairs, "
-          f"{out.stat().st_size // 1024} KB.")
+          f"{len(stacks)} five-stacks, {out.stat().st_size // 1024} KB.")
 
 
 if __name__ == "__main__":

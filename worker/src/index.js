@@ -21,10 +21,10 @@
 //                     since then, for fearless-session champ exclusions
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
 //
-// Free-tier budget per /refresh: 6 match-id calls + <=MAX_NEW_MATCHES match
-// fetches + mastery for players with new games — worst case ~24 subrequests
-// (cap 50), and JSON work stays tiny because at most MAX_NEW_MATCHES ~80 KB
-// matches are parsed (CPU cap 10 ms).
+// Free-tier budget per /refresh: 9 match-id calls + <=MAX_NEW_MATCHES match
+// fetches + mastery and league entries for players with new games — worst
+// case ~39 subrequests (cap 50), and JSON work stays tiny because at most
+// MAX_NEW_MATCHES ~80 KB matches are parsed (CPU cap 10 ms).
 
 const DEBOUNCE_MS = 3 * 60 * 1000; // ignore refreshes closer together than this
 const RECENT_IDS = 5;              // newest match ids to check per player
@@ -78,6 +78,22 @@ async function riot(env, host, path) {
 
 function bump(rec, won) { rec.games += 1; rec.wins += won ? 1 : 0; }
 
+// One scoreboard line of a five-stack game — rid marks our players, name
+// labels the opponents (mirrors build_seed.py).
+function scoreboardRow(p, rid) {
+  const row = {
+    champ: p.championId,
+    role: p.teamPosition || "UNKNOWN",
+    k: p.kills || 0, d: p.deaths || 0, a: p.assists || 0,
+    cs: (p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0),
+    dmg: p.totalDamageDealtToChampions || 0,
+    gold: p.goldEarned || 0,
+  };
+  if (rid) row.rid = rid;
+  else row.name = p.riotIdGameName || p.summonerName || "?";
+  return row;
+}
+
 function mergeMatch(state, m) {
   const parts = m.info.participants;
   // PUUIDs are encrypted per API application — map every PUUID era we know
@@ -106,9 +122,26 @@ function mergeMatch(state, m) {
       bump(s, p.win);
       s.cs = (s.cs || 0) + csVal;
       s.secs = (s.secs || 0) + dur;
+      // KDA sums, with kg counting the games they cover: records seeded
+      // before these fields existed keep accumulating from here, and kg is
+      // what makes the averages honest (never divide by `games`)
+      s.k = (s.k || 0) + (p.kills || 0);
+      s.d = (s.d || 0) + (p.deaths || 0);
+      s.a = (s.a || 0) + (p.assists || 0);
+      s.kg = (s.kg || 0) + 1;
       bump(s.roles[pos] ??= { games: 0, wins: 0 }, p.win);
     }
     bump(pl.queues[qid] ??= { games: 0, wins: 0 }, p.win);
+    // slim history row for the profiles view, newest first, capped
+    const endTs = m.info.gameEndTimestamp
+      || (m.info.gameStartTimestamp || m.info.gameCreation || 0) + dur * 1000;
+    (pl.recent ??= []).push({
+      id: m.metadata.matchId, ts: endTs, q: qid, champ: p.championId,
+      role: pos, win: p.win ? 1 : 0, k: p.kills || 0, d: p.deaths || 0,
+      a: p.assists || 0, cs: csVal, secs: dur,
+    });
+    pl.recent.sort((x, y) => y.ts - x.ts);
+    if (pl.recent.length > 20) pl.recent.length = 20;
   }
 
   for (const teamId of [100, 200]) {
@@ -119,6 +152,20 @@ function mergeMatch(state, m) {
     // pilot-attributed pairs: sort by (riotId, championId) like the seeder
     tracked.sort((a, b) => ridOf[a.puuid] < ridOf[b.puuid] ? -1
       : ridOf[a.puuid] > ridOf[b.puuid] ? 1 : a.championId - b.championId);
+    // a full five-stack lands in the match-history feed with both scoreboards
+    if (tracked.length === 5) {
+      const stacks = state.stacks ??= [];
+      if (!stacks.some(s => s.id === m.metadata.matchId)) {
+        const endTs = m.info.gameEndTimestamp
+          || (m.info.gameStartTimestamp || m.info.gameCreation || 0) + dur * 1000;
+        stacks.push({
+          id: m.metadata.matchId, ts: endTs, q: qid, secs: dur, win: won ? 1 : 0,
+          us: tracked.map(p => scoreboardRow(p, ridOf[p.puuid])),
+          them: parts.filter(p => p.teamId !== teamId).map(p => scoreboardRow(p)),
+        });
+        stacks.sort((x, y) => y.ts - x.ts);
+      }
+    }
     for (let i = 0; i < tracked.length; i++)
       for (let j = i + 1; j < tracked.length; j++) {
         const [pi, pj] = [tracked[i], tracked[j]];
@@ -178,11 +225,14 @@ function deriveData(state) {
       riotId, puuid,
       profileIconId: pl.profileIconId,
       mastery: pl.mastery,
+      ranks: pl.ranks || null,  // seeded from the last fetch_data.py run
       champions: Object.entries(pl.champs)
         .map(([cid, s]) => ({ championId: +cid, games: s.games, wins: s.wins,
-          cs: s.cs || 0, secs: s.secs || 0, roles: s.roles, q: s.q || {} }))
+          cs: s.cs || 0, secs: s.secs || 0, k: s.k || 0, d: s.d || 0,
+          a: s.a || 0, kg: s.kg || 0, roles: s.roles, q: s.q || {} }))
         .sort((a, b) => b.games - a.games),
       queues: pl.queues,
+      recent: pl.recent || [],
     };
   });
   return {
@@ -191,6 +241,7 @@ function deriveData(state) {
       ddragonVersion: state.ddragonVersion,
       champions: state.championNames,
       players,
+      stacks: state.stacks || [],
       playerPairs: Object.entries(state.playerPairs)
         .map(([k, s]) => { const [a, b] = k.split("|"); return { a, b, ...s, q: s.q || {} }; }),
       championPairs: Object.entries(state.champPairs)
@@ -241,14 +292,27 @@ async function refresh(env) {
     processed.add(id);
   }
 
-  // mastery moves only when someone actually played
+  // mastery and season rank move only when someone actually played
   if (batch.length) {
+    const QUEUE_OF = { RANKED_SOLO_5x5: "420", RANKED_FLEX_SR: "440" };
     for (const { riotId, puuid } of state.config.riotIds) {
       if (!playersWithNew.has(riotId)) continue;
       const mastery = await riot(env, platform,
         `/lol/champion-mastery/v4/champion-masteries/by-puuid/${puuid}`);
       state.players[riotId].mastery = mastery.map(m =>
         ({ championId: m.championId, level: m.championLevel, points: m.championPoints }));
+      // League-v4 carries the exact in-game season W/L — the front-end shows
+      // it as the solo/flex record, so it has to track new games, not wait
+      // for the next reseed. A failure keeps the previous entry.
+      try {
+        const ranks = {};
+        for (const e of await riot(env, platform, `/lol/league/v4/entries/by-puuid/${puuid}`) || []) {
+          const qid = QUEUE_OF[e.queueType];
+          if (qid) ranks[qid] = { tier: e.tier, division: e.rank,
+            lp: e.leaguePoints || 0, wins: e.wins || 0, losses: e.losses || 0 };
+        }
+        state.players[riotId].ranks = ranks;
+      } catch { /* stale rank beats a failed refresh */ }
     }
   }
 
