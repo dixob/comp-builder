@@ -307,6 +307,25 @@ def main():
     RECENT_KEEP = 20
     recent_games = defaultdict(list)
 
+    # Full five-stack games — one team made up entirely of tracked accounts.
+    # Kept whole (both scoreboards) for the match-history tab.
+    stacks = []
+
+    def scoreboard_row(p, rid=None):
+        row = {
+            "champ": p["championId"],
+            "role": p.get("teamPosition") or "UNKNOWN",
+            "k": p.get("kills", 0), "d": p.get("deaths", 0), "a": p.get("assists", 0),
+            "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
+            "dmg": p.get("totalDamageDealtToChampions", 0),
+            "gold": p.get("goldEarned", 0),
+        }
+        if rid:
+            row["rid"] = rid
+        else:
+            row["name"] = p.get("riotIdGameName") or p.get("summonerName") or "?"
+        return row
+
     # Only count matches newer than this — old games say little about current
     # form (the raw match stays cached either way).
     max_age_days = cfg.get("max_match_age_days", 365)
@@ -354,6 +373,15 @@ def main():
             tracked_parts = sorted(
                 (p for p in team if p["puuid"] in puuid_to_player),
                 key=lambda p: (puuid_to_player[p["puuid"]], p["championId"]))
+            if len(tracked_parts) == 5:
+                stacks.append({
+                    "id": m["metadata"]["matchId"], "ts": end_ts, "q": qid,
+                    "secs": dur, "win": int(won),
+                    "us": [scoreboard_row(p, puuid_to_player[p["puuid"]])
+                           for p in tracked_parts],
+                    "them": [scoreboard_row(p)
+                             for p in parts if p["teamId"] != team_id],
+                })
             for i in range(len(tracked_parts)):
                 for j in range(i + 1, len(tracked_parts)):
                     pi, pj = tracked_parts[i], tracked_parts[j]
@@ -408,6 +436,7 @@ def main():
              "q": {str(q): dict(v) for q, v in s["q"].items()}}
             for (pa, a, pb, b), s in champ_pair_stats.items() if s["games"] >= 2
         ],
+        "stacks": sorted(stacks, key=lambda g: -g["ts"]),
     }
     (DATA / "players.json").write_text(json.dumps(out))
     print(f"Wrote data/players.json ({len(players)} players, {len(matches)} matches, "

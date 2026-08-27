@@ -687,6 +687,36 @@
   .pf-mrow .dim { color: var(--text-muted); }
   .pf-mrow .when { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
 
+  /* ---- match history (five-stacks) ---- */
+  .mh-sum { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .mh-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 10px; background: var(--layer-2); border-radius: 8px;
+    margin-bottom: 4px; font-size: 12px; line-height: 16px; cursor: pointer;
+  }
+  .mh-row:hover { background: var(--hover-layer); }
+  .mh-row.win { box-shadow: inset 3px 0 0 var(--positive); }
+  .mh-row.loss { box-shadow: inset 3px 0 0 var(--negative); }
+  .mh-row.remake { opacity: 0.6; box-shadow: inset 3px 0 0 var(--text-muted); }
+  .mh-row .res { flex: none; width: 14px; font-weight: 600; }
+  .mh-row.win .res { color: var(--positive); }
+  .mh-row.loss .res { color: var(--negative); }
+  .mh-row .mq { min-width: 68px; font-weight: 600; }
+  .mh-row .dim { color: var(--text-muted); }
+  .mh-row .when { margin-left: auto; color: var(--text-muted); white-space: nowrap; }
+  .mh-row .chev { color: var(--text-muted); transition: transform 0.15s; }
+  .mh-row.open .chev { transform: rotate(180deg); }
+  .mh-detail { padding: 4px 10px 10px; margin: -2px 0 4px; }
+  .mh-detail table { font-size: 12px; }
+  .mh-detail th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); text-align: left; padding: 4px 8px; }
+  .mh-detail th.mh-side { font-size: 12px; text-transform: none; letter-spacing: 0; }
+  .mh-detail th.mh-side.win { color: var(--positive); }
+  .mh-detail th.mh-side.loss { color: var(--negative); }
+  .mh-detail td { padding: 3px 8px; background: var(--layer-2); }
+  .mh-detail td:first-child { border-radius: 8px 0 0 8px; }
+  .mh-detail td:last-child { border-radius: 0 8px 8px 0; }
+  .mh-detail .wr-cell span { min-width: 42px; }
+
   /* ---- nightmare mode ----
      The whole page goes cold while the Nightmare blunt rotation tab is open:
      the same token system, possessed. Set on body (renderTabs toggles it), so
@@ -1798,6 +1828,7 @@ function render() {
               <button id="tabOverall">Best overall</button>
               <button id="tabWorst" title="The inverse search: the worst realistic comp this roster could field — real picks for each lane, the worst records to pilot them">Nightmare blunt rotation</button>
               <button id="tabProfiles" title="Pseudo op.gg: per-player profiles — ranks, roles, champion stats, duos, recent games">Profiles</button>
+              <button id="tabHistory" title="Every game where one whole team was our five registered accounts — the group's shared match history, with full scoreboards">Match history</button>
             </span>
           </h2>
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
@@ -1866,6 +1897,7 @@ function render() {
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
   $("#tabWorst").addEventListener("click", () => switchTab("worst"));
   $("#tabProfiles").addEventListener("click", () => switchTab("profiles"));
+  $("#tabHistory").addEventListener("click", () => switchTab("history"));
   $("#uniqueToggle").addEventListener("click", () => {
     uniqueComps = !uniqueComps;
     localStorage.setItem("uniqueComps", uniqueComps ? "1" : "0");
@@ -1877,8 +1909,8 @@ function render() {
   renderScore();
   // A full re-render (data refresh, flex toggle) resets #ranked to the empty
   // state; optimizer tabs are left for an explicit re-run, but the profiles
-  // pane derives straight from D, so restoring it is free.
-  if (activeTab === "profiles") switchTab("profiles");
+  // and match-history panes derive straight from D, so restoring them is free.
+  if (activeTab === "profiles" || activeTab === "history") switchTab(activeTab);
 }
 
 // --- draft card ------------------------------------------------------------
@@ -3101,6 +3133,88 @@ function renderProfilePane() {
   }));
 }
 
+// --- match history (five-stacks) -------------------------------------------
+// The group's shared op.gg: every game where one whole team was our five
+// registered accounts, kept with both scoreboards. Like the profiles pane it
+// derives from D at render time (flexView already narrows the feed to flex),
+// so the flex-only toggle and refreshes need no extra invalidation.
+const mhOpen = new Set();     // expanded match ids — survive re-renders
+const MH_SHOW_STEP = 25;      // rows added per "show more" click
+let mhShow = MH_SHOW_STEP;
+const REMAKE_SECS = 300;      // sub-5-minute games are remakes: shown, not counted
+
+// enemy names are arbitrary player-chosen strings straight from match data
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const MH_LANE = { TOP: 0, JUNGLE: 1, MIDDLE: 2, BOTTOM: 3, UTILITY: 4 };
+const byLane = rows => [...rows].sort((a, b) => (MH_LANE[a.role] ?? 9) - (MH_LANE[b.role] ?? 9));
+
+function mhScoreboard(g) {
+  const maxDmg = Math.max(1, ...g.us.concat(g.them).map(r => r.dmg || 0));
+  const mins = Math.max(1, g.secs / 60);
+  const line = r => `<tr>
+    <td><span class="pf-champ"><img src="${champIcon(r.champ)}" alt="">${r.rid
+      ? `<b>${esc(r.rid.split("#")[0])}</b>`
+      : `<span class="dim">${esc(r.name || "?")}</span>`}${ROLE_ICON[r.role] || ""}</span></td>
+    <td>${kdaHTML({ k: r.k, d: r.d, a: r.a, kg: 1 })}</td>
+    <td><div class="wr-cell"><span>${((r.dmg || 0) / 1000).toFixed(1)}k</span><div class="wr-bar"><div style="width:${(r.dmg || 0) / maxDmg * 100}%"></div></div></div></td>
+    <td>${((r.gold || 0) / 1000).toFixed(1)}k</td>
+    <td>${r.cs} <span class="dim">(${(r.cs / mins).toFixed(1)})</span></td>
+  </tr>`;
+  const head = (label, won) => `<tr><th class="mh-side ${won ? "win" : "loss"}">${label} — ${won ? "Victory" : "Defeat"}</th>
+    <th>KDA</th><th>Damage</th><th>Gold</th><th>CS</th></tr>`;
+  return `<div class="mh-detail pf-sec"><table>
+    ${head("Us", g.win)}${byLane(g.us).map(line).join("")}
+    ${head("Them", !g.win)}${byLane(g.them).map(line).join("")}
+  </table></div>`;
+}
+
+function renderHistoryPane() {
+  const games = D.stacks || [];
+  if (!games.length) {
+    $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${!D.stacks
+      ? "No five-stack feed in this dataset yet — it arrives with the next data refresh."
+      : flexOnly ? "No five-stack flex games recorded."
+        : "No games where a whole team was our five registered accounts."}</div>`;
+    return;
+  }
+  const real = games.filter(g => g.secs >= REMAKE_SECS);
+  const wins = real.reduce((a, g) => a + g.win, 0);
+  const remakes = games.length - real.length;
+  const sum = `<div class="mh-sum">
+    <span class="chip"><b>${real.length}</b> five-stack game${real.length === 1 ? "" : "s"}${flexOnly ? " · flex only" : ""}</span>
+    ${real.length ? `<span class="chip">${wins}W ${real.length - wins}L · <b>${pct(wins / real.length)}</b></span>` : ""}
+    ${remakes ? `<span class="chip">${remakes} remake${remakes === 1 ? "" : "s"} not counted</span>` : ""}
+  </div>`;
+  const rows = games.slice(0, mhShow).map(g => {
+    const remake = g.secs < REMAKE_SECS;
+    const open = mhOpen.has(g.id);
+    const icons = byLane(g.us).map(r =>
+      `<span class="ci" data-tip="${esc(r.rid.split("#")[0])} · ${r.k}/${r.d}/${r.a}"><img src="${champIcon(r.champ)}" alt="${champName(r.champ)}"></span>`).join("");
+    return `<div class="mh-row ${remake ? "remake" : g.win ? "win" : "loss"}${open ? " open" : ""}" data-mh="${g.id}"
+        title="Click for the full scoreboard">
+      <span class="res">${remake ? "—" : g.win ? "W" : "L"}</span>
+      <span class="mq">${QUEUE_NAME[String(g.q)] || "Queue " + g.q}${remake ? ` <span class="dim">remake</span>` : ""}</span>
+      <span class="champ-icons">${icons}</span>
+      <span class="dim">${Math.round(g.secs / 60)}min</span>
+      <span class="when">${timeAgo(g.ts)}</span>
+      <span class="chev">▾</span>
+    </div>${open ? mhScoreboard(g) : ""}`;
+  }).join("");
+  const more = games.length > mhShow
+    ? `<button class="btn" id="mhMore" style="margin-top:6px">Show ${Math.min(MH_SHOW_STEP, games.length - mhShow)} more of ${games.length - mhShow}</button>`
+    : "";
+  $("#ranked").innerHTML = sum + rows + more;
+  document.querySelectorAll("[data-mh]").forEach(el => el.addEventListener("click", () => {
+    const id = el.dataset.mh;
+    mhOpen.has(id) ? mhOpen.delete(id) : mhOpen.add(id);
+    renderHistoryPane();
+  }));
+  const moreBtn = $("#mhMore");
+  if (moreBtn) moreBtn.addEventListener("click", () => { mhShow += MH_SHOW_STEP; renderHistoryPane(); });
+}
+
 // Three result sets: champs-only for the roles set in the slots, the full
 // role-agnostic search, and the nightmare blunt rotation (the same search
 // minimized). Tabs switch the view without touching the slots; the Profiles
@@ -3146,7 +3260,7 @@ function switchTab(tab) {
   // there is only one list — asking for "overall" gets the champs-only one.
   if (rolesLocked()) tab = "assigned";
   activeTab = tab;
-  if (tab !== "profiles" && !rankedTabs[tab]) {
+  if (tab !== "profiles" && tab !== "history" && !rankedTabs[tab]) {
     const res = tab === "overall" ? optimize(10)
       : tab === "worst" ? optimizeWorst(10)
       : optimizeChamps(10);
@@ -3231,14 +3345,17 @@ function renderTabs() {
         jungle", it's the champs and role swaps this group demonstrably loses with. Filters and
         bans still apply. #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
     : activeTab === "profiles" ? "Player profiles"
+    : activeTab === "history" ? "Match history"
       : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   $("#tabWorst").classList.toggle("active", activeTab === "worst");
   $("#tabProfiles").classList.toggle("active", activeTab === "profiles");
-  // "No repeats" governs result lists; it means nothing on a profile page
-  $("#uniqueToggle").hidden = !locked && activeTab === "profiles";
+  $("#tabHistory").classList.toggle("active", activeTab === "history");
+  // "No repeats" governs result lists; it means nothing on the panes
+  $("#uniqueToggle").hidden = !locked && (activeTab === "profiles" || activeTab === "history");
   if (!locked && activeTab === "profiles") { renderProfilePane(); return; }
+  if (!locked && activeTab === "history") { renderHistoryPane(); return; }
   const results = rankedTabs[activeTab];
   if (!results) {
     $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${activeTab === "assigned"
@@ -3354,6 +3471,7 @@ function flexView(src) {
       return f && f.games >= 2 ? { pa: cp.pa, a: cp.a, pb: cp.pb, b: cp.b,
         games: f.games, wins: f.wins } : null;
     }).filter(Boolean),
+    stacks: (src.stacks || []).filter(g => g.q === 440),
   };
 }
 

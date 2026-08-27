@@ -65,6 +65,23 @@ def main():
     champ_pairs = defaultdict(lambda: {"games": 0, "wins": 0, "q": {}})
     profile_sums = defaultdict(lambda: {k: 0 for k in PROFILE_FIELDS} | {"games": 0})
     processed = []
+    # full five-stack games, both scoreboards — the match-history tab's feed
+    stacks = []
+
+    def scoreboard_row(p, rid=None):
+        row = {
+            "champ": p["championId"],
+            "role": p.get("teamPosition") or "UNKNOWN",
+            "k": p.get("kills", 0), "d": p.get("deaths", 0), "a": p.get("assists", 0),
+            "cs": p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0),
+            "dmg": p.get("totalDamageDealtToChampions", 0),
+            "gold": p.get("goldEarned", 0),
+        }
+        if rid:
+            row["rid"] = rid
+        else:
+            row["name"] = p.get("riotIdGameName") or p.get("summonerName") or "?"
+        return row
 
     skipped_old = 0
     for f in sorted(glob.glob(str(ROOT / "data" / "matches" / "*.json"))):
@@ -130,6 +147,15 @@ def main():
                 continue
             won = int(bool(team[0]["win"]))
             tracked.sort(key=lambda p: (rid_of[p["puuid"]], p["championId"]))
+            if len(tracked) == 5:
+                stacks.append({
+                    "id": m["metadata"]["matchId"],
+                    "ts": (m["info"].get("gameEndTimestamp")
+                           or m["info"].get("gameStartTimestamp", 0) + dur * 1000),
+                    "q": int(qid), "secs": dur, "win": won,
+                    "us": [scoreboard_row(p, rid_of[p["puuid"]]) for p in tracked],
+                    "them": [scoreboard_row(p) for p in parts if p["teamId"] != team_id],
+                })
             for i in range(len(tracked)):
                 for j in range(i + 1, len(tracked)):
                     pi, pj = tracked[i], tracked[j]
@@ -165,6 +191,7 @@ def main():
                         for p in src["players"]],
         },
         "players": players,
+        "stacks": sorted(stacks, key=lambda g: -g["ts"]),
         "playerPairs": dict(player_pairs),
         "champPairs": dict(champ_pairs),
         "profileSums": {str(k): v for k, v in profile_sums.items()},
@@ -179,7 +206,7 @@ def main():
     print(f"Wrote {out.relative_to(ROOT)} — {len(processed)} matches "
           f"({skipped_old} older than {max_age_days}d skipped), "
           f"{len(players)} players, {len(champ_pairs)} champ pairs, "
-          f"{out.stat().st_size // 1024} KB.")
+          f"{len(stacks)} five-stacks, {out.stat().st_size // 1024} KB.")
 
 
 if __name__ == "__main__":

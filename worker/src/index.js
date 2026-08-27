@@ -78,6 +78,22 @@ async function riot(env, host, path) {
 
 function bump(rec, won) { rec.games += 1; rec.wins += won ? 1 : 0; }
 
+// One scoreboard line of a five-stack game — rid marks our players, name
+// labels the opponents (mirrors build_seed.py).
+function scoreboardRow(p, rid) {
+  const row = {
+    champ: p.championId,
+    role: p.teamPosition || "UNKNOWN",
+    k: p.kills || 0, d: p.deaths || 0, a: p.assists || 0,
+    cs: (p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0),
+    dmg: p.totalDamageDealtToChampions || 0,
+    gold: p.goldEarned || 0,
+  };
+  if (rid) row.rid = rid;
+  else row.name = p.riotIdGameName || p.summonerName || "?";
+  return row;
+}
+
 function mergeMatch(state, m) {
   const parts = m.info.participants;
   // PUUIDs are encrypted per API application — map every PUUID era we know
@@ -136,6 +152,20 @@ function mergeMatch(state, m) {
     // pilot-attributed pairs: sort by (riotId, championId) like the seeder
     tracked.sort((a, b) => ridOf[a.puuid] < ridOf[b.puuid] ? -1
       : ridOf[a.puuid] > ridOf[b.puuid] ? 1 : a.championId - b.championId);
+    // a full five-stack lands in the match-history feed with both scoreboards
+    if (tracked.length === 5) {
+      const stacks = state.stacks ??= [];
+      if (!stacks.some(s => s.id === m.metadata.matchId)) {
+        const endTs = m.info.gameEndTimestamp
+          || (m.info.gameStartTimestamp || m.info.gameCreation || 0) + dur * 1000;
+        stacks.push({
+          id: m.metadata.matchId, ts: endTs, q: qid, secs: dur, win: won ? 1 : 0,
+          us: tracked.map(p => scoreboardRow(p, ridOf[p.puuid])),
+          them: parts.filter(p => p.teamId !== teamId).map(p => scoreboardRow(p)),
+        });
+        stacks.sort((x, y) => y.ts - x.ts);
+      }
+    }
     for (let i = 0; i < tracked.length; i++)
       for (let j = i + 1; j < tracked.length; j++) {
         const [pi, pj] = [tracked[i], tracked[j]];
@@ -211,6 +241,7 @@ function deriveData(state) {
       ddragonVersion: state.ddragonVersion,
       champions: state.championNames,
       players,
+      stacks: state.stacks || [],
       playerPairs: Object.entries(state.playerPairs)
         .map(([k, s]) => { const [a, b] = k.split("|"); return { a, b, ...s, q: s.q || {} }; }),
       championPairs: Object.entries(state.champPairs)
