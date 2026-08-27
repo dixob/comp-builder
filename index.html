@@ -410,6 +410,21 @@
     transition: opacity 110ms var(--ease-entrance), transform 110ms var(--ease-entrance);
   }
   .ci:hover::after { opacity: 1; transform: translateX(-50%) translateY(0); }
+  /* MVP / worst of the game — picked by impact score (see gameImpact) */
+  .ci.mvp img { box-shadow: 0 0 0 2px var(--warning); }
+  .ci.worst img { box-shadow: 0 0 0 2px var(--negative); }
+  .ci.mvp::before, .ci.worst::before {
+    position: absolute; top: -8px; right: -3px; z-index: 1;
+    font-size: 10px; line-height: 1; pointer-events: none;
+  }
+  .ci.mvp::before { content: "★"; color: var(--warning); }
+  .ci.worst::before { content: "▼"; color: var(--negative); }
+  .imp-chip {
+    font-size: 10px; line-height: 14px; font-weight: 600; white-space: nowrap;
+    border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: 1px;
+  }
+  .imp-chip.mvp { background: var(--warning-dim); color: var(--warning); }
+  .imp-chip.worst { background: var(--negative-dim); color: var(--negative); }
   .syn-chip {
     display: inline-block; font-size: 12px; line-height: 16px; font-weight: 600;
     border-radius: 999px; padding: 3px 10px;
@@ -707,6 +722,7 @@
   .mh-row.open .chev { transform: rotate(180deg); }
   .mh-detail { padding: 4px 10px 10px; margin: -2px 0 4px; }
   .mh-detail table { font-size: 12px; }
+  .mh-detail td { white-space: nowrap; }  /* the .pf-sec container scrolls */
   .mh-detail th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); text-align: left; padding: 4px 8px; }
   .mh-detail th.mh-side { font-size: 12px; text-transform: none; letter-spacing: 0; }
   .mh-detail th.mh-side.win { color: var(--positive); }
@@ -714,7 +730,11 @@
   .mh-detail td { padding: 3px 8px; background: var(--layer-2); }
   .mh-detail td:first-child { border-radius: 8px 0 0 8px; }
   .mh-detail td:last-child { border-radius: 0 8px 8px 0; }
-  .mh-detail .wr-cell span { min-width: 42px; }
+  .mh-detail .wr-cell span { min-width: 42px; white-space: nowrap; }
+  /* flex-basis 0 means the auto-layout table never grows the damage column
+     for the bar — a floor keeps it a real bar when the table is content-
+     sized (the phone breakpoint, where the scoreboard scrolls sideways) */
+  .mh-detail .wr-bar { min-width: 56px; }
 
   /* ---- nightmare mode ----
      The whole page goes cold while the Nightmare blunt rotation tab is open:
@@ -942,6 +962,9 @@
     th { padding: 2px 6px; }
     .rank { width: 22px; height: 22px; font-size: 11px; }
     .wr-bar { display: none; }
+    /* ...except an open scoreboard's damage bars — comparing damage at a
+       glance is what the expanded view is for */
+    .mh-detail .wr-bar { display: block; }
     .ci { margin-right: 2px; }
     .ci img { width: 26px; height: 26px; }
     .syn-chip { font-size: 11px; padding: 3px 7px; }
@@ -958,8 +981,11 @@
   }
 </style>
 <script>
-  // Apply the saved theme before first paint; unset = follow the system.
-  { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; }
+  // Apply the saved theme before first paint. Unset: desktop widths default
+  // to dark (the design-lead theme); phones keep following the system.
+  { const t = localStorage.getItem("theme");
+    if (t) document.documentElement.dataset.theme = t;
+    else if (matchMedia("(min-width: 601px)").matches) document.documentElement.dataset.theme = "dark"; }
 </script>
 </head>
 <body>
@@ -3088,6 +3114,7 @@ function renderProfilePane() {
     wr: e => e.wins / e.games,
     kda: e => e.kg ? (e.k + e.a) / Math.max(1, e.d) : null,
     csm: e => e.secs ? e.cs / (e.secs / 60) : null,
+    dpm: e => e.dsecs ? e.dmg / (e.dsecs / 60) : null,
     meta: metaOf,
   };
   let champs = p.champions;
@@ -3107,7 +3134,7 @@ function renderProfilePane() {
     player's own Win rate column against, and the prior the optimizer shrinks small
     personal samples toward.</span></span>`;
   const champHead = [["champ", "Champ"], ["games", "Games"], ["wr", "Win rate"],
-    ["kda", "KDA"], ["csm", "CS/m"], ["meta", "Meta WR"]].map(([k, label]) =>
+    ["kda", "KDA"], ["csm", "CS/m"], ["dpm", "DPM"], ["meta", "Meta WR"]].map(([k, label]) =>
     `<th class="sortable${pfSort.key === k && pfSort.dir ? " sorted" : ""}" data-sort="${k}"
       title="Click to sort">${label}${pfSort.key === k && pfSort.dir ? (pfSort.dir === 1 ? " ▼" : " ▲") : ""}${k === "meta" ? metaInfo : ""}</th>`).join("");
   const champRows = champs.slice(0, 10).map(e => {
@@ -3123,6 +3150,7 @@ function renderProfilePane() {
       <td><div class="wr-cell"><b>${pct(wr)}</b><div class="wr-bar"><div style="width:${wr * 100}%"></div></div></div></td>
       <td>${kdaHTML(e)}</td>
       <td>${e.secs ? (e.cs / (e.secs / 60)).toFixed(1) : "—"}</td>
+      <td>${e.dsecs ? Math.round(e.dmg / (e.dsecs / 60)) : `<span class="dim">—</span>`}</td>
       <td>${metaCell}</td>
     </tr>`;
   }).join("");
@@ -3155,9 +3183,28 @@ function renderProfilePane() {
       <img src="${champIcon(g.champ)}" alt="">
       <span class="mname">${champName(g.champ)}${ROLE_ICON[g.role] || ""}</span>
       ${kdaHTML({ k: g.k, d: g.d, a: g.a, kg: 1 })}
-      <span class="dim">${g.secs ? (g.cs / (g.secs / 60)).toFixed(1) + " cs/m" : ""} · ${Math.round(g.secs / 60)}min · ${QUEUE_NAME[g.q] || QUEUE_NAME[String(g.q)] || "q" + g.q}</span>
+      <span class="dim">${g.secs ? (g.cs / (g.secs / 60)).toFixed(1) + " cs/m · " : ""}${g.dmg && g.secs ? Math.round(g.dmg / (g.secs / 60)) + " dpm · " : ""}${Math.round(g.secs / 60)}min · ${QUEUE_NAME[g.q] || QUEUE_NAME[String(g.q)] || "q" + g.q}</span>
       <span class="when">${timeAgo(g.ts)}</span>
     </div>`).join("");
+
+  // damage/min across every tracked game — dsecs counts only the seconds the
+  // damage sums cover (live records merged before the field existed lack it)
+  const tDmg = p.champions.reduce((a, c) => a + (c.dmg || 0), 0);
+  const tDsecs = p.champions.reduce((a, c) => a + (c.dsecs || 0), 0);
+  const dpmLine = tDsecs
+    ? `<div class="pf-rankline" title="Damage to champions per minute, averaged over every tracked game${flexOnly ? " (flex only)" : ""}">Damage/min: <b>${Math.round(tDmg / (tDsecs / 60))}</b></div>`
+    : "";
+  // average Robert score over the player's five-stack games (the score only
+  // exists where we hold both full scoreboards — see the impact section)
+  const imps = [];
+  for (const g of D.stacks || []) {
+    if (g.secs < REMAKE_SECS) continue;
+    const t = impTotals(g.us);
+    for (const r of g.us) if (r.rid === p.riotId) imps.push(impactScore(r, t));
+  }
+  const impLine = imps.length
+    ? `<div class="pf-rankline" title="Average Robert score over ${imps.length} five-stack game${imps.length === 1 ? "" : "s"}${flexOnly ? " (flex only)" : ""} — see the match-history scoreboards for how it's built">Avg Robert score: <b>${(imps.reduce((a, b) => a + b, 0) / imps.length).toFixed(1)}</b></div>`
+    : "";
 
   $("#ranked").innerHTML = `
     <div class="pf-switch">${chips}</div>
@@ -3166,6 +3213,7 @@ function renderProfilePane() {
       <div>
         <div class="pf-name">${name} <span class="tag">#${tag || ""}</span></div>
         <div class="pf-rankline">${rankLine(p)}</div>
+        ${dpmLine}${impLine}
       </div>
       <div class="pf-queues">${queues || `<span class="hint">no ranked games</span>`}</div>
     </div>
@@ -3218,22 +3266,113 @@ const esc = s => String(s).replace(/[&<>"]/g, c =>
 const MH_LANE = { TOP: 0, JUNGLE: 1, MIDDLE: 2, BOTTOM: 3, UTILITY: 4 };
 const byLane = rows => [...rows].sort((a, b) => (MH_LANE[a.role] ?? 9) - (MH_LANE[b.role] ?? 9));
 
+// --- impact score (shown as "Robert score") --------------------------------
+// One number for "how much did the game run through this player", built only
+// from what a scoreboard row records. Four within-team shares, each judged
+// against the average for the player's ROLE across every recorded five-stack
+// (both teams — 10 rows per game), so a support isn't punished for posting a
+// support's damage share:
+//   kill participation 35% · damage share 25% · gold share 15% · deaths 25%
+// Each component enters as a log2 ratio vs its role baseline (double the
+// baseline = +1, half = −1, deaths inverted), clamped to ±1.5, weighted, and
+// scaled to roughly ±100. MVP / worst are picked among OUR five; remakes and
+// off-role UNKNOWNs fall back to the all-roles baseline.
+const IMPACT_W = { kp: 0.35, dmg: 0.25, gold: 0.15, death: 0.25 };
+const impTotals = rows => rows.reduce((t, r) => ({ k: t.k + r.k, d: t.d + r.d,
+  dmg: t.dmg + (r.dmg || 0), gold: t.gold + (r.gold || 0) }), { k: 0, d: 0, dmg: 0, gold: 0 });
+const impComps = (r, t) => ({
+  kp: (r.k + r.a) / Math.max(1, t.k),
+  death: r.d / Math.max(1, t.d),
+  dmg: (r.dmg || 0) / Math.max(1, t.dmg),
+  gold: (r.gold || 0) / Math.max(1, t.gold),
+});
+let impBase = null;  // cached per feed — applyData swaps D, dropping the cache
+function impactBaselines() {
+  if (impBase && impBase.src === D.stacks) return impBase;
+  const acc = {};
+  for (const g of D.stacks || []) {
+    if (g.secs < REMAKE_SECS) continue;
+    for (const rows of [g.us, g.them]) {
+      const t = impTotals(rows);
+      for (const r of rows) {
+        const c = impComps(r, t);
+        for (const key of [r.role, "_all"]) {
+          const a = acc[key] ??= { n: 0, kp: 0, death: 0, dmg: 0, gold: 0 };
+          a.n += 1;
+          for (const k in IMPACT_W) a[k] += c[k];
+        }
+      }
+    }
+  }
+  impBase = { src: D.stacks };
+  for (const [role, a] of Object.entries(acc))
+    impBase[role] = { kp: a.kp / a.n, death: a.death / a.n, dmg: a.dmg / a.n, gold: a.gold / a.n };
+  return impBase;
+}
+function impactScore(r, t) {
+  const base = impactBaselines();
+  const b = base[r.role] || base._all;
+  if (!b) return 0;
+  // +0.02 keeps a 0-kill team or a deathless game finite without drowning
+  // the signal (shares live around 0.2)
+  const lg = (x, y) => Math.max(-1.5, Math.min(1.5, Math.log2((x + 0.02) / (y + 0.02))));
+  const c = impComps(r, t);
+  let s = 0;
+  for (const k in IMPACT_W) s += IMPACT_W[k] * (k === "death" ? lg(b[k], c[k]) : lg(c[k], b[k]));
+  return Math.round(s * 66.7);
+}
+function gameImpact(g) {
+  const scores = new Map();
+  for (const rows of [g.us, g.them]) {
+    const t = impTotals(rows);
+    for (const r of rows) scores.set(r, impactScore(r, t));
+  }
+  let mvp = null, worst = null;
+  if (g.secs >= REMAKE_SECS)
+    for (const r of g.us) {
+      if (!mvp || scores.get(r) > scores.get(mvp)) mvp = r;
+      if (!worst || scores.get(r) < scores.get(worst)) worst = r;
+    }
+  if (mvp === worst) mvp = worst = null;  // degenerate feed (a lone row)
+  return { scores, mvp, worst };
+}
+
+// Tiered name for our worst seat, cut where the data actually falls (worst-
+// performer spread over 384 stacks: median −27, p10 −49, a positive score —
+// worst on a team where everyone popped off — happens ~1% of games):
+//   >0 ~1% · >−20 ~31% · >−40 ~47% · >−60 ~18% · else ~3%
+const worstLabel = s => s > 0 ? "you alright son" : s > -20 ? "malik moment"
+  : s > -40 ? "holy stinker" : s > -60 ? "uninstall" : "...";
+
+const IMPACT_INFO = `<span class="info" tabindex="0">i<span class="tip">
+  The Robert score: how much the game ran through this player. Kill
+  participation (35%), share of the team's damage (25%) and gold (15%), with
+  death share counting against (25%) — each judged against the average for
+  that role across every recorded five-stack, so supports are measured as
+  supports. Roughly −100 (invisible) to +100 (carried). ★ marks our MVP;
+  ▼ our worst seat, named by how bad it got: "you alright son" (still
+  positive) → malik moment → holy stinker → uninstall → "..." (below
+  −60).</span></span>`;
+
 function mhScoreboard(g) {
   const maxDmg = Math.max(1, ...g.us.concat(g.them).map(r => r.dmg || 0));
   const mins = Math.max(1, g.secs / 60);
+  const { scores, mvp, worst } = gameImpact(g);
   const line = r => `<tr>
     <td><span class="pf-champ"><img src="${champIcon(r.champ)}" alt="">${r.rid
       ? `<b>${esc(r.rid.split("#")[0])}</b>`
       : `<span class="dim">${esc(r.name || "?")}</span>`}${ROLE_ICON[r.role] || ""}</span></td>
     <td>${kdaHTML({ k: r.k, d: r.d, a: r.a, kg: 1 })}</td>
-    <td><div class="wr-cell"><span>${((r.dmg || 0) / 1000).toFixed(1)}k</span><div class="wr-bar"><div style="width:${(r.dmg || 0) / maxDmg * 100}%"></div></div></div></td>
+    <td><div class="wr-cell"><span>${((r.dmg || 0) / 1000).toFixed(1)}k <span class="dim">(${Math.round((r.dmg || 0) / mins)})</span></span><div class="wr-bar"><div style="width:${(r.dmg || 0) / maxDmg * 100}%"></div></div></div></td>
     <td>${((r.gold || 0) / 1000).toFixed(1)}k</td>
     <td>${r.cs} <span class="dim">(${(r.cs / mins).toFixed(1)})</span></td>
+    <td>${scores.get(r)}${r === mvp ? `<span class="imp-chip mvp">★ MVP</span>`
+      : r === worst ? `<span class="imp-chip worst">▼ ${worstLabel(scores.get(r))}</span>` : ""}</td>
   </tr>`;
-  const head = (label, won) => `<tr><th class="mh-side ${won ? "win" : "loss"}">${label} — ${won ? "Victory" : "Defeat"}</th>
-    <th>KDA</th><th>Damage</th><th>Gold</th><th>CS</th></tr>`;
+  const head = (label, won, tip = "") => `<tr><th class="mh-side ${won ? "win" : "loss"}">${label} — ${won ? "Victory" : "Defeat"}</th>
+    <th>KDA</th><th title="damage to champions — total (per minute)">Damage (dmg/m)</th><th>Gold</th><th>CS</th><th>Robert score${tip}</th></tr>`;
   return `<div class="mh-detail pf-sec"><table>
-    ${head("Us", g.win)}${byLane(g.us).map(line).join("")}
+    ${head("Us", g.win, IMPACT_INFO)}${byLane(g.us).map(line).join("")}
     ${head("Them", !g.win)}${byLane(g.them).map(line).join("")}
   </table></div>`;
 }
@@ -3258,8 +3397,10 @@ function renderHistoryPane() {
   const rows = games.slice(0, mhShow).map(g => {
     const remake = g.secs < REMAKE_SECS;
     const open = mhOpen.has(g.id);
+    const gi = remake ? { mvp: null, worst: null } : gameImpact(g);
+    const { mvp, worst } = gi;
     const icons = byLane(g.us).map(r =>
-      `<span class="ci" data-tip="${esc(r.rid.split("#")[0])} · ${r.k}/${r.d}/${r.a}"><img src="${champIcon(r.champ)}" alt="${champName(r.champ)}"></span>`).join("");
+      `<span class="ci${r === mvp ? " mvp" : r === worst ? " worst" : ""}" data-tip="${esc(r.rid.split("#")[0])} · ${r.k}/${r.d}/${r.a}${r === mvp ? " · MVP of the game" : r === worst ? ` · worst seat: ${worstLabel(gi.scores.get(r))}` : ""}"><img src="${champIcon(r.champ)}" alt="${champName(r.champ)}"></span>`).join("");
     return `<div class="mh-row ${remake ? "remake" : g.win ? "win" : "loss"}${open ? " open" : ""}" data-mh="${g.id}"
         title="Click for the full scoreboard">
       <span class="res">${remake ? "—" : g.win ? "W" : "L"}</span>
@@ -3515,7 +3656,7 @@ function flexView(src) {
         const f = c.q && c.q["440"];
         return f && f.games ? { championId: c.championId, games: f.games, wins: f.wins,
           cs: f.cs || 0, secs: f.secs || 0, k: f.k || 0, d: f.d || 0, a: f.a || 0,
-          kg: f.kg || 0, roles: f.roles || {} } : null;
+          kg: f.kg || 0, dmg: f.dmg || 0, dsecs: f.dsecs || 0, roles: f.roles || {} } : null;
       }).filter(Boolean).sort((a, b) => b.games - a.games),
       queues: Object.fromEntries(Object.entries(p.queues || {}).filter(([q]) => q === "440")),
       recent: (p.recent || []).filter(g => g.q === 440),

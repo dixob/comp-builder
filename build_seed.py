@@ -111,12 +111,14 @@ def main():
             c = pl["champs"].setdefault(str(p["championId"]),
                                         {"games": 0, "wins": 0, "cs": 0, "secs": 0,
                                          "k": 0, "d": 0, "a": 0, "kg": 0,
+                                         "dmg": 0, "dsecs": 0,
                                          "roles": {}, "q": {}})
             pos = p.get("teamPosition") or "UNKNOWN"
             cs_val = p.get("totalMinionsKilled", 0) + p.get("neutralMinionsKilled", 0)
             for s in (c, c["q"].setdefault(qid, {"games": 0, "wins": 0, "cs": 0,
                                                  "secs": 0, "k": 0, "d": 0, "a": 0,
-                                                 "kg": 0, "roles": {}})):
+                                                 "kg": 0, "dmg": 0, "dsecs": 0,
+                                                 "roles": {}})):
                 s["games"] += 1
                 s["wins"] += p["win"]
                 s["cs"] += cs_val
@@ -125,6 +127,10 @@ def main():
                 s["d"] += p.get("deaths", 0)
                 s["a"] += p.get("assists", 0)
                 s["kg"] += 1
+                # damage/min sums, dsecs counting the seconds they cover
+                # (same honesty rule as kg)
+                s["dmg"] += p.get("totalDamageDealtToChampions", 0)
+                s["dsecs"] += dur
                 r = s["roles"].setdefault(pos, {"games": 0, "wins": 0})
                 r["games"] += 1
                 r["wins"] += p["win"]
@@ -138,6 +144,7 @@ def main():
                 "champ": p["championId"], "role": pos, "win": int(p["win"]),
                 "k": p.get("kills", 0), "d": p.get("deaths", 0),
                 "a": p.get("assists", 0), "cs": cs_val, "secs": dur,
+                "dmg": p.get("totalDamageDealtToChampions", 0),
             })
 
         for team_id in (100, 200):
