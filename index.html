@@ -384,6 +384,8 @@
     background: var(--layer-3); color: var(--text-secondary);
   }
   .rank.r1 { background: var(--accent); color: var(--on-accent); }
+  /* the "winner" of the Worst team tab — first place is nothing to be proud of */
+  .rank.rneg { background: var(--negative-dim); color: var(--negative); }
   .wr-cell { display: flex; align-items: center; gap: 10px; }
   .wr-cell b { font-weight: 600; }
   .wr-bar { flex: 1; max-width: 110px; height: 4px; background: var(--layer-3); border-radius: 2px; overflow: hidden; }
@@ -1324,6 +1326,114 @@ function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
   return out;
 }
 
+// --- nightmare blunt rotation --------------------------------------------
+// The inverse search: the WORST comp the roster could legally field. Same
+// filters, same scoring model, every comparison flipped.
+
+// Anti-candidates: the lowest-scoring champs a player could take into a role.
+// The mastery/games ranges and draft availability still apply (the nightmare
+// is still a comp the board would accept), but there are no viability tiers —
+// an off-meta lane with a losing record is exactly what this list is for.
+// Shares candCache (distinct key prefix) so every existing cache clear works.
+function worstCandidates(riotId, role, n = 3) {
+  const ck = "worst|" + riotId + "|" + role + "|" + n;
+  if (ck in candCache) return candCache[ck];
+  const p = D.players.find(p => p.riotId === riotId);
+  const pool = new Map();
+  for (const c of p.champions) pool.set(c.championId, c);
+  for (const m of p.mastery) if (!pool.has(m.championId)) pool.set(m.championId, null);
+  const scored = [...pool.keys()].map(cid => ({
+    cid,
+    s: slotScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
+    inRange: inGamesRange((pool.get(cid) || {}).games || 0),
+  })).filter(c => !draftUnavailable(c.cid) && !counterAvoid.has(c.cid)
+    && !uniqueExclude.has(riotId + "|" + c.cid));
+  const filtered = scored.filter(c => c.mastered && c.inRange);
+  const list = (filtered.length ? filtered : scored).sort((a, b) => a.s - b.s);
+  return candCache[ck] = list.slice(0, n).map(c => c.cid);
+}
+
+// Most NEGATIVE champ-pair adjustment per player pair — the lower-bound
+// mirror of pairBoostIdx, for pruning optimizeWorst's role permutations.
+let pairDragIdx = null;
+function buildPairDrag() {
+  pairDragIdx = {};
+  for (const key in champPairIdx) {
+    const [x, y] = key.split(":");
+    const [pa, ca] = x.split("|"), [pb, cb] = y.split("|");
+    const adj = champPairAdjRaw(pa, +ca, pb, +cb);
+    const pk = pa < pb ? pa + "|" + pb : pb + "|" + pa;
+    if (adj < (pairDragIdx[pk] || 0)) pairDragIdx[pk] = adj;
+  }
+}
+
+// optimize() with the sign flipped: minimize the comp score over every
+// 5-player subset × role permutation × anti-candidates. `floor` becomes a
+// ceiling and the pruning bound uses each slot's WORST pick plus the most
+// negative possible champ synergy.
+function optimizeWorst(topN = 10) {
+  const pool = D.players.map(p => p.riotId).filter(r => included[r]);
+  if (pool.length < 5) return [];
+  const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
+  const keep = topN * 6;  // headroom for the dedup pass below
+  let results = [], ceiling = Infinity;
+  if (!pairDragIdx) buildPairDrag();
+  for (const five of playerSets) {
+    for (const perm of permutations(five)) {
+      const cands = perm.map((rid, i) => worstCandidates(rid, ROLES[i]));
+      if (cands.some(c => !c.length)) continue;
+      let permPairs = 0, champSynBound = 0;
+      for (let i = 0; i < 5; i++)
+        for (let j = i + 1; j < 5; j++) {
+          permPairs += playerPairAdj(perm[i], ROLES[i], perm[j], ROLES[j]);
+          const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
+          champSynBound += pairDragIdx[pk] || 0;
+        }
+      const ind = cands.map((cs, i) => cs.map(cid => slotScore(perm[i], cid, ROLES[i])));
+      // lower bound for this whole role assignment — skip it if it can't place
+      let minIndSum = 0;
+      for (const arr of ind) minIndSum += Math.min(...arr);
+      if (minIndSum / 5 + permPairs + champSynBound >= ceiling) continue;
+      const idx = [0, 0, 0, 0, 0];
+      while (true) {
+        const c0 = cands[0][idx[0]], c1 = cands[1][idx[1]], c2 = cands[2][idx[2]],
+              c3 = cands[3][idx[3]], c4 = cands[4][idx[4]];
+        if (c0 !== c1 && c0 !== c2 && c0 !== c3 && c0 !== c4 && c1 !== c2 &&
+            c1 !== c3 && c1 !== c4 && c2 !== c3 && c2 !== c4 && c3 !== c4) {
+          const indMean = (ind[0][idx[0]] + ind[1][idx[1]] + ind[2][idx[2]]
+            + ind[3][idx[3]] + ind[4][idx[4]]) / 5;
+          let syn = permPairs;
+          for (let i = 0; i < 5; i++)
+            for (let j = i + 1; j < 5; j++)
+              syn += champPairAdjRaw(perm[i], cands[i][idx[i]], perm[j], cands[j][idx[j]]);
+          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
+          if (total < ceiling) {
+            const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
+            results.push({ assign, total, ind: indMean, syn });
+            if (results.length > keep * 4) {
+              results.sort((a, b) => a.total - b.total);
+              results.length = keep;
+              ceiling = results[keep - 1].total;
+            }
+          }
+        }
+        let d = 4;
+        while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
+        if (d < 0) break;
+      }
+    }
+  }
+  results.sort((a, b) => a.total - b.total);
+  const seen = new Set(), out = [];
+  for (const r of results) {
+    const key = r.assign.map(a => a.player + a.champ).join(",");
+    if (!seen.has(key)) { seen.add(key); out.push(r); }
+    if (out.length >= topN) break;
+  }
+  return out;
+}
+
 // --- UI ------------------------------------------------------------------
 const $ = sel => document.querySelector(sel);
 const champName = id => (D.champions[id] || {}).name || `#${id}`;
@@ -1481,6 +1591,7 @@ function render() {
             <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
+              <button id="tabWorst" title="The inverse search: the worst comp this roster could legally field — worst champs on worst roles">Nightmare blunt rotation</button>
             </span>
           </h2>
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
@@ -1492,13 +1603,13 @@ function render() {
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
-      rankedTabs.overall = null;  // player pool changed — stale
-      if (activeTab === "overall") switchTab("overall");
+      rankedTabs.overall = rankedTabs.worst = null;  // player pool changed — stale
+      if (activeTab === "overall" || activeTab === "worst") switchTab(activeTab);
     }));
   // the squad card's sliders and their board-head mirrors drive the same state
   const filtersChanged = () => {
     candCache = {};  // candidate lists depend on the filters
-    rankedTabs.assigned = rankedTabs.overall = null;
+    rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
     updateSquadNotes();
     renderSlots();
     renderScore();
@@ -1547,6 +1658,7 @@ function render() {
   $("#optChamps").addEventListener("click", runOptimizeChamps);
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
+  $("#tabWorst").addEventListener("click", () => switchTab("worst"));
   $("#uniqueToggle").addEventListener("click", () => {
     uniqueComps = !uniqueComps;
     localStorage.setItem("uniqueComps", uniqueComps ? "1" : "0");
@@ -2084,8 +2196,8 @@ function draftChanged(rerenderCard = true) {
     if (counterAvoid.has(s.champ)) return [champName(s.champ) + " (hard-countered)"];
     return [];
   });
-  const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall };
-  rankedTabs.assigned = rankedTabs.overall = null;
+  const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall, worst: !!rankedTabs.worst };
+  rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
   if (autoOptimize(dead)) {
     // fresh results are worth showing — in whichever tab they landed
     if (rolesLocked()) { had.assigned = true; activeTab = "assigned"; }
@@ -2280,8 +2392,8 @@ function ensureIncluded(rids) {
     if (cb) cb.checked = true;
   }
   if (changed) {
-    rankedTabs.overall = null;  // player pool changed — stale
-    if (activeTab === "overall") switchTab("overall");
+    rankedTabs.overall = rankedTabs.worst = null;  // player pool changed — stale
+    if (activeTab === "overall" || activeTab === "worst") switchTab(activeTab);
   }
 }
 
@@ -2613,9 +2725,10 @@ function profileHTML(cids) {
     </div>`;
 }
 
-// Two result sets: champs-only for the roles set in the slots, and the full
-// role-agnostic search. Tabs switch the view without touching the slots.
-const rankedTabs = { assigned: null, overall: null };
+// Three result sets: champs-only for the roles set in the slots, the full
+// role-agnostic search, and the nightmare blunt rotation (the same search
+// minimized). Tabs switch the view without touching the slots.
+const rankedTabs = { assigned: null, overall: null, worst: null };
 let activeTab = "overall";
 
 // "No repeats": each comp on the list puts nobody on a champ they already
@@ -2636,7 +2749,9 @@ function uniqueList(tab, results) {
     uniqueExclude = new Set(results[0].assign.map(a => a.player + "|" + a.champ));
     candCache = {};
     while (out.length < RANKED_TOP) {
-      const res = tab === "overall" ? optimize(1, fixed, pinPlayer) : optimizeChamps(1, fixed);
+      const res = tab === "overall" ? optimize(1, fixed, pinPlayer)
+        : tab === "worst" ? optimizeWorst(1)
+        : optimizeChamps(1, fixed);
       if (!res || !res.length) break;
       out.push(res[0]);
       for (const a of res[0].assign) uniqueExclude.add(a.player + "|" + a.champ);
@@ -2655,7 +2770,9 @@ function switchTab(tab) {
   if (rolesLocked()) tab = "assigned";
   activeTab = tab;
   if (!rankedTabs[tab]) {
-    const res = tab === "overall" ? optimize(10) : optimizeChamps(10);
+    const res = tab === "overall" ? optimize(10)
+      : tab === "worst" ? optimizeWorst(10)
+      : optimizeChamps(10);
     rankedTabs[tab] = res && res.length ? res : null;
   }
   renderTabs();
@@ -2667,9 +2784,18 @@ function renderTabs() {
   // chip that can't be switched away from is a dead control. The heading
   // carries the meaning instead.
   $("#rankedTabs").hidden = locked;
-  $("#rankedHead").textContent = locked ? "Top comps for these roles" : "Top compositions";
+  $("#rankedHead").innerHTML = locked ? "Top comps for these roles"
+    : activeTab === "worst"
+      ? `Nightmare blunt rotation<span class="info" tabindex="0">i<span class="tip">
+        The optimizer in reverse: the worst comps this roster could legally field — every player
+        on their lowest-scoring champion in their least suitable role, judged by the exact same
+        model as the top comps (win rates shrunk toward the meta, mastery, role comfort, synergy).
+        The mastery/games filters and any bans still apply, so each row is a real, pickable comp.
+        #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
+      : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
+  $("#tabWorst").classList.toggle("active", activeTab === "worst");
   const results = rankedTabs[activeTab];
   if (!results) {
     $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${activeTab === "assigned"
@@ -2697,7 +2823,7 @@ function renderRanked(results) {
       predict.</span></span></th></tr>
     ${results.map((r, i) => `
       <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
-        <td><span class="rank ${i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
+        <td><span class="rank ${i === 0 && activeTab === "worst" ? "rneg" : i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
         <td><div class="wr-cell"><b>${pct(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
         <td class="champ-icons">${r.assign.map(a =>
           `<span class="ci" data-tip="${a.player.split("#")[0]} · ${ROLE_LABEL[a.role]}"><img src="${champIcon(a.champ)}" alt="${champName(a.champ)}"></span>`).join("")}</td>
@@ -2802,9 +2928,9 @@ const refreshedAt = iso => {
 function applyData(players, meta, profiles) {
   D = players; META = meta; PROFILES = profiles;
   masteryIdx = {}; champPairIdx = {}; playerPairIdx = {};
-  indCache = {}; candCache = {}; pairBoostIdx = null;
+  indCache = {}; candCache = {}; pairBoostIdx = null; pairDragIdx = null;
   for (const k of Object.keys(roleShareCache)) delete roleShareCache[k];
-  rankedTabs.assigned = rankedTabs.overall = null;
+  rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
   // Data Dragon lists game-mode variant units (Jade_Annie, id 60001, …) that
   // share display names with real champions — name lookups always resolve to
   // the base champ (lowest id), and the datalist shows each name once.
@@ -2916,7 +3042,7 @@ function initRoleToggle() {
     const m = $("#roleToggle2");
     if (m) m.classList.toggle("active", strictRole);
     indCache = {}; candCache = {};  // scores depend on the mode
-    rankedTabs.assigned = rankedTabs.overall = null;
+    rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
     renderChips(); renderSlots(); renderScore();
   });
 }
