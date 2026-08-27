@@ -362,6 +362,9 @@
   }
   .tabs button:hover { color: var(--text-primary); }
   .tabs button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+  /* top-level page switcher — same pill strip, sitting above whichever page is open */
+  .page-tabs { margin-bottom: var(--sp-4); }
+  .page-tabs button { font-size: 13px; padding: 7px 16px; }
   table { width: 100%; border-collapse: separate; border-spacing: 0 var(--sp-1); font-size: 14px; }
   th {
     text-align: left; color: var(--text-muted); font-weight: 500; font-size: 11px;
@@ -654,8 +657,13 @@
   .pf-champ { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
   .pf-champ img { width: 28px; height: 28px; border-radius: 8px; }
   .pf-champ svg { color: var(--text-muted); flex: none; }
+  .pf-sec th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  .pf-sec th.sortable:hover { color: var(--text-primary); }
+  .pf-sec th.sorted { color: var(--accent); }
   .pf-kda { white-space: nowrap; }
-  .pf-kda b { font-weight: 600; }
+  /* the ratio is a different quantity than the averages it follows — give it
+     a visible gap or "3.0 / 4.0 3.75" reads as one run-on number */
+  .pf-kda b { font-weight: 600; margin-left: 10px; }
   .pf-kda .dim { color: var(--text-muted); }
   .pf-duo { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: var(--layer-2); border-radius: 8px; margin-bottom: 4px; font-size: 12px; line-height: 16px; }
   .pf-duo img { width: 26px; height: 26px; border-radius: 8px; }
@@ -840,6 +848,13 @@
     box-shadow: var(--elev-lg);
   }
   .info:hover .tip, .info:focus .tip { display: block; }
+  /* tips inside the profiles tables live in a scroll container (.pf-sec is
+     overflow-x:auto), and an upward-anchored tip pokes out of that box and
+     gets clipped at the card edge — open it downward over the rows, hugging
+     the right edge (the phone breakpoint's fixed overlay takes over below) */
+  @media (min-width: 601px) {
+    .pf-sec .info .tip { top: 22px; bottom: auto; left: auto; right: -8px; transform: none; }
+  }
   code { background: var(--layer-2); padding: 2px 7px; border-radius: 6px; font-size: 12px; color: var(--accent); }
   /* ---- touch (iPad/phone, any orientation) ---- */
   @media (pointer: coarse) {
@@ -1727,8 +1742,47 @@ const gamesControl = sfx => `<div class="mfloor">
     </div>
   </div>`;
 
+// Top-level pages: the builder (squad + optimizer) and the standalone data
+// panes (profiles, match history). The panes used to live as extra result
+// tabs inside the comps card; as page-level features they get the full
+// width, survive role locks, and stop crowding the comps tab strip.
+const PAGE_TITLE = { profiles: "Player profiles", history: "Match history" };
+let page = "builder";
+
+const pageNav = () => `<nav class="tabs page-tabs">
+    <button data-page="builder" class="${page === "builder" ? "active" : ""}">Builder</button>
+    <button data-page="profiles" class="${page === "profiles" ? "active" : ""}" title="Pseudo op.gg: per-player profiles — ranks, roles, champion stats, duos, recent games">Profiles</button>
+    <button data-page="history" class="${page === "history" ? "active" : ""}" title="Every game where one whole team was our five registered accounts — the group's shared match history, with full scoreboards">Match history</button>
+  </nav>`;
+
+function wirePageNav() {
+  document.querySelectorAll("[data-page]").forEach(b =>
+    b.addEventListener("click", () => setPage(b.dataset.page)));
+}
+
+function setPage(p) {
+  if (p === page) return;
+  page = p;
+  render();
+  // returning to the builder restores whichever comp list was showing
+  if (page === "builder" && rankedTabs[activeTab]) renderTabs();
+}
+
 function render() {
-  $("#app").innerHTML = `
+  if (page !== "builder") {
+    // the nightmare haunts the worst-comps tab — it doesn't follow you here
+    document.body.classList.remove("nightmare");
+    setHaunt(false);
+    $("#app").innerHTML = `${pageNav()}
+      <div class="card">
+        <h2 style="margin-bottom:14px">${PAGE_TITLE[page]}</h2>
+        <div id="ranked"></div>
+      </div>`;
+    wirePageNav();
+    if (page === "profiles") renderProfilePane(); else renderHistoryPane();
+    return;
+  }
+  $("#app").innerHTML = `${pageNav()}
     <div class="layout">
       <div>
         <div class="card" id="squadCard">
@@ -1803,8 +1857,6 @@ function render() {
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
               <button id="tabWorst" title="The inverse search: the worst realistic comp this roster could field — real picks for each lane, the worst records to pilot them">Nightmare blunt rotation</button>
-              <button id="tabProfiles" title="Pseudo op.gg: per-player profiles — ranks, roles, champion stats, duos, recent games">Profiles</button>
-              <button id="tabHistory" title="Every game where one whole team was our five registered accounts — the group's shared match history, with full scoreboards">Match history</button>
             </span>
           </h2>
           <div id="ranked"><div class="empty">${emptyIcon()}<br>Run the optimizer.</div></div>
@@ -1813,6 +1865,7 @@ function render() {
     </div>
     <datalist id="champdl">${Object.keys(CHAMP_BY_NAME).sort()
       .map(k => `<option value="${champName(CHAMP_BY_NAME[k])}">`).join("")}</datalist>`;
+  wirePageNav();
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
@@ -1872,8 +1925,6 @@ function render() {
   $("#tabAssigned").addEventListener("click", () => switchTab("assigned"));
   $("#tabOverall").addEventListener("click", () => switchTab("overall"));
   $("#tabWorst").addEventListener("click", () => switchTab("worst"));
-  $("#tabProfiles").addEventListener("click", () => switchTab("profiles"));
-  $("#tabHistory").addEventListener("click", () => switchTab("history"));
   $("#uniqueToggle").addEventListener("click", () => {
     uniqueComps = !uniqueComps;
     localStorage.setItem("uniqueComps", uniqueComps ? "1" : "0");
@@ -1883,10 +1934,6 @@ function render() {
   renderDraft();
   renderSlots();
   renderScore();
-  // A full re-render (data refresh, flex toggle) resets #ranked to the empty
-  // state; optimizer tabs are left for an explicit re-run, but the profiles
-  // and match-history panes derive straight from D, so restoring them is free.
-  if (activeTab === "profiles" || activeTab === "history") switchTab(activeTab);
 }
 
 // --- draft card ------------------------------------------------------------
@@ -2428,11 +2475,9 @@ function draftChanged(rerenderCard = true) {
   if (rerenderCard) renderDraft();
   renderSlots();
   renderScore();
-  // The profiles pane isn't a result set (no `had` entry) but must still
-  // follow draft-state changes: switchTab re-renders it, and — when a lock
-  // toggle just made the tab strip disappear — coerces it to the one list
-  // the locked board allows.
-  if (activeTab === "profiles" || had[activeTab]) switchTab(activeTab);
+  // a live update can land while a data page is showing — the builder's tab
+  // strip isn't rendered there, and the stale caches re-fill on return
+  if (page === "builder" && had[activeTab]) switchTab(activeTab);
 }
 
 // Match a live teammate to one of our tracked players by Riot ID (case-
@@ -2653,6 +2698,7 @@ function emptyIcon() {
 }
 
 function renderSlots() {
+  if (!$("#slots")) return;  // a data page is showing — the board isn't rendered
   $("#slots").innerHTML = ROLES.map((role, i) => {
     const s = slots[i];
     const playerOpts = D.players.map(p =>
@@ -2812,6 +2858,7 @@ function renderSlots() {
 }
 
 function renderScore() {
+  if (!$("#hero")) return;  // a data page is showing — the score card isn't rendered
   renderProfile();
   const assign = slots.map((s, i) => ({ player: s.player, champ: s.champ, role: ROLES[i] }));
   const ready = assign.every(a => a.player && a.champ)
@@ -2952,10 +2999,15 @@ function profileHTML(cids) {
 // Per-player profile pages built from the same dataset the optimizer scores
 // with: ranks, queue records, role distribution, champion stats (with meta
 // comparison), duo synergy, and — when the data pipeline has produced them —
-// KDA numbers and a recent-match feed. Rendered into #ranked like a fourth
-// result set; everything is derived from D at render time, so the flex-only
-// view and refreshes need no extra invalidation.
+// KDA numbers and a recent-match feed. Rendered into the profiles page's
+// #ranked container; everything is derived from D at render time, so the
+// flex-only view and refreshes need no extra invalidation.
 let profilePlayer = null;
+
+// Champions-table sort: dir 0 is the dataset's own order (games, high→low);
+// clicking a header cycles high→low → low→high → default. Rows without the
+// stat sink to the bottom in either direction.
+let pfSort = { key: null, dir: 0 };
 
 const QUEUE_NAME = { "420": "Solo/duo", "440": "Flex", "700": "Clash", "710": "Clash" };
 
@@ -2970,11 +3022,14 @@ function timeAgo(ts) {
 // "4.1 / 2.9 / 6.0  2.4" — per-game averages plus the ratio. kg counts the
 // games the sums cover; on live data merged before the KDA fields existed it
 // can trail `games`, so the title says which slice the average is from.
+// Single-game rows (recent games, match-history scoreboards) are exact
+// counts, not averages — "19.0 deaths" is a decimal pretending to matter.
 function kdaHTML(s) {
   if (!s.kg) return `<span class="dim">—</span>`;
   const ratio = ((s.k + s.a) / Math.max(1, s.d)).toFixed(2);
   const partial = s.games && s.kg < s.games ? ` title="KDA from the newest ${s.kg} of ${s.games} games"` : "";
-  return `<span class="pf-kda"${partial}>${(s.k / s.kg).toFixed(1)} <span class="dim">/</span> ${(s.d / s.kg).toFixed(1)} <span class="dim">/</span> ${(s.a / s.kg).toFixed(1)} <b>${ratio}</b></span>`;
+  const avg = v => (v / s.kg).toFixed(s.kg === 1 ? 0 : 1);
+  return `<span class="pf-kda"${partial}>${avg(s.k)} <span class="dim">/</span> ${avg(s.d)} <span class="dim">/</span> ${avg(s.a)} <b>${ratio}</b></span>`;
 }
 
 function rankLine(p) {
@@ -3025,21 +3080,50 @@ function renderProfilePane() {
   }).join("");
 
   const mainRole = e => Object.entries(e.roles).sort((a, b) => b[1].games - a[1].games)[0]?.[0];
-  const champRows = p.champions.slice(0, 10).map(e => {
+  // the champ's overall current-patch meta win rate — all pilots, all roles
+  const metaOf = e => (META && META.champions[e.championId] || {}).winRate ?? null;
+  const champVal = {
+    champ: e => champName(e.championId).toLowerCase(),
+    games: e => e.games,
+    wr: e => e.wins / e.games,
+    kda: e => e.kg ? (e.k + e.a) / Math.max(1, e.d) : null,
+    csm: e => e.secs ? e.cs / (e.secs / 60) : null,
+    meta: metaOf,
+  };
+  let champs = p.champions;
+  if (pfSort.dir) {
+    const val = champVal[pfSort.key];
+    champs = [...champs].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va == null || vb == null) return (va == null) - (vb == null);
+      // names: dir 1 reads A→Z; numbers: dir 1 reads high→low
+      return typeof va === "string" ? va.localeCompare(vb) * pfSort.dir
+        : (vb - va) * pfSort.dir;
+    });
+  }
+  const metaInfo = `<span class="info" tabindex="0">i<span class="tip">
+    The champ's current-patch win rate across the whole meta — everyone piloting it at the
+    group's tier and region (all roles combined), from OP.GG. The baseline to judge the
+    player's own Win rate column against, and the prior the optimizer shrinks small
+    personal samples toward.</span></span>`;
+  const champHead = [["champ", "Champ"], ["games", "Games"], ["wr", "Win rate"],
+    ["kda", "KDA"], ["csm", "CS/m"], ["meta", "Meta WR"]].map(([k, label]) =>
+    `<th class="sortable${pfSort.key === k && pfSort.dir ? " sorted" : ""}" data-sort="${k}"
+      title="Click to sort">${label}${pfSort.key === k && pfSort.dir ? (pfSort.dir === 1 ? " ▼" : " ▲") : ""}${k === "meta" ? metaInfo : ""}</th>`).join("");
+  const champRows = champs.slice(0, 10).map(e => {
     const wr = e.wins / e.games;
     const role = mainRole(e);
-    let metaChip = `<span class="dim">—</span>`;
-    if (META && e.games >= 5 && role && role !== "UNKNOWN") {
-      const d = wr - metaWR(e.championId, role);
-      metaChip = `<span class="syn-chip ${d >= 0 ? "pos" : "neg"}" title="win rate vs the champ's current-patch meta WR in ${ROLE_LABEL[role]}">${d >= 0 ? "▲ +" : "▼ "}${(d * 100).toFixed(1)}pp</span>`;
-    }
+    const mw = metaOf(e);
+    const metaCell = mw != null
+      ? `<span title="current-patch meta win rate, all roles">${pct(mw)}</span>`
+      : `<span class="dim">—</span>`;
     return `<tr>
       <td><span class="pf-champ"><img src="${champIcon(e.championId)}" alt="">${champName(e.championId)}${role && ROLE_ICON[role] ? ROLE_ICON[role] : ""}</span></td>
       <td>${e.games}g</td>
       <td><div class="wr-cell"><b>${pct(wr)}</b><div class="wr-bar"><div style="width:${wr * 100}%"></div></div></div></td>
       <td>${kdaHTML(e)}</td>
       <td>${e.secs ? (e.cs / (e.secs / 60)).toFixed(1) : "—"}</td>
-      <td>${metaChip}</td>
+      <td>${metaCell}</td>
     </tr>`;
   }).join("");
   const moreChamps = Math.max(0, p.champions.length - 10);
@@ -3089,7 +3173,7 @@ function renderProfilePane() {
       <div class="pf-sec">
         <h4>Champions${flexOnly ? " (flex only)" : ""}</h4>
         <table>
-          <tr><th>Champ</th><th>Games</th><th>Win rate</th><th>KDA</th><th>CS/m</th><th>vs meta</th></tr>
+          <tr>${champHead}</tr>
           ${champRows}
         </table>
         ${moreChamps ? `<div class="hint" style="margin-top:6px">+ ${moreChamps} more champs with games</div>` : ""}
@@ -3105,6 +3189,14 @@ function renderProfilePane() {
     </div>`;
   document.querySelectorAll("[data-pf]").forEach(b => b.addEventListener("click", () => {
     profilePlayer = b.dataset.pf;
+    renderProfilePane();
+  }));
+  document.querySelectorAll("[data-sort]").forEach(th => th.addEventListener("click", e => {
+    if (e.target.closest(".info")) return;  // reading the bubble isn't a sort
+    const k = th.dataset.sort;
+    pfSort = pfSort.key === k
+      ? { key: k, dir: pfSort.dir === 1 ? -1 : pfSort.dir === -1 ? 0 : 1 }
+      : { key: k, dir: 1 };
     renderProfilePane();
   }));
 }
@@ -3193,8 +3285,7 @@ function renderHistoryPane() {
 
 // Three result sets: champs-only for the roles set in the slots, the full
 // role-agnostic search, and the nightmare blunt rotation (the same search
-// minimized). Tabs switch the view without touching the slots; the Profiles
-// tab renders the pseudo-op.gg pane instead of a result list.
+// minimized). Tabs switch the view without touching the slots.
 const rankedTabs = { assigned: null, overall: null, worst: null };
 let activeTab = "overall";
 
@@ -3236,7 +3327,7 @@ function switchTab(tab) {
   // there is only one list — asking for "overall" gets the champs-only one.
   if (rolesLocked()) tab = "assigned";
   activeTab = tab;
-  if (tab !== "profiles" && tab !== "history" && !rankedTabs[tab]) {
+  if (!rankedTabs[tab]) {
     const res = tab === "overall" ? optimize(10)
       : tab === "worst" ? optimizeWorst(10)
       : optimizeChamps(10);
@@ -3320,18 +3411,10 @@ function renderTabs() {
         that lane, or one the player has a genuine in-role sample on — so this isn't "ADC in the
         jungle", it's the champs and role swaps this group demonstrably loses with. Filters and
         bans still apply. #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
-    : activeTab === "profiles" ? "Player profiles"
-    : activeTab === "history" ? "Match history"
       : "Top compositions";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   $("#tabWorst").classList.toggle("active", activeTab === "worst");
-  $("#tabProfiles").classList.toggle("active", activeTab === "profiles");
-  $("#tabHistory").classList.toggle("active", activeTab === "history");
-  // "No repeats" governs result lists; it means nothing on the panes
-  $("#uniqueToggle").hidden = !locked && (activeTab === "profiles" || activeTab === "history");
-  if (!locked && activeTab === "profiles") { renderProfilePane(); return; }
-  if (!locked && activeTab === "history") { renderHistoryPane(); return; }
   const results = rankedTabs[activeTab];
   if (!results) {
     $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${activeTab === "assigned"
