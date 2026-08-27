@@ -21,10 +21,10 @@
 //                     since then, for fearless-session champ exclusions
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
 //
-// Free-tier budget per /refresh: 6 match-id calls + <=MAX_NEW_MATCHES match
-// fetches + mastery for players with new games — worst case ~24 subrequests
-// (cap 50), and JSON work stays tiny because at most MAX_NEW_MATCHES ~80 KB
-// matches are parsed (CPU cap 10 ms).
+// Free-tier budget per /refresh: 9 match-id calls + <=MAX_NEW_MATCHES match
+// fetches + mastery and league entries for players with new games — worst
+// case ~39 subrequests (cap 50), and JSON work stays tiny because at most
+// MAX_NEW_MATCHES ~80 KB matches are parsed (CPU cap 10 ms).
 
 const DEBOUNCE_MS = 3 * 60 * 1000; // ignore refreshes closer together than this
 const RECENT_IDS = 5;              // newest match ids to check per player
@@ -261,14 +261,27 @@ async function refresh(env) {
     processed.add(id);
   }
 
-  // mastery moves only when someone actually played
+  // mastery and season rank move only when someone actually played
   if (batch.length) {
+    const QUEUE_OF = { RANKED_SOLO_5x5: "420", RANKED_FLEX_SR: "440" };
     for (const { riotId, puuid } of state.config.riotIds) {
       if (!playersWithNew.has(riotId)) continue;
       const mastery = await riot(env, platform,
         `/lol/champion-mastery/v4/champion-masteries/by-puuid/${puuid}`);
       state.players[riotId].mastery = mastery.map(m =>
         ({ championId: m.championId, level: m.championLevel, points: m.championPoints }));
+      // League-v4 carries the exact in-game season W/L — the front-end shows
+      // it as the solo/flex record, so it has to track new games, not wait
+      // for the next reseed. A failure keeps the previous entry.
+      try {
+        const ranks = {};
+        for (const e of await riot(env, platform, `/lol/league/v4/entries/by-puuid/${puuid}`) || []) {
+          const qid = QUEUE_OF[e.queueType];
+          if (qid) ranks[qid] = { tier: e.tier, division: e.rank,
+            lp: e.leaguePoints || 0, wins: e.wins || 0, losses: e.losses || 0 };
+        }
+        state.players[riotId].ranks = ranks;
+      } catch { /* stale rank beats a failed refresh */ }
     }
   }
 

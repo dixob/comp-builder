@@ -1724,10 +1724,19 @@ function render() {
             const games = p.champions.reduce((a, c) => a + c.games, 0);
             const wins = p.champions.reduce((a, c) => a + c.wins, 0);
             const QUEUE_TAG = { "420": "solo", "440": "flex", "700": "clash", "710": "clash" };
+            // Solo/flex records come from the league entry when there is one —
+            // the same season numbers the client shows — so the list can't
+            // contradict the in-game profile. Queues without a ladder entry
+            // fall back to the tracked-window aggregate.
             const split = p.queues
               ? Object.entries(p.queues)
                   .sort(([a], [b]) => a - b)
-                  .map(([qid, s]) => `<span class="q">${(QUEUE_TAG[qid] || "q" + qid).toUpperCase()}</span> ${pct(s.wins / s.games)} · ${s.games}g`)
+                  .map(([qid, s]) => {
+                    const r = (p.ranks || {})[qid];
+                    const rec = r && r.tier && (r.wins + r.losses)
+                      ? { games: r.wins + r.losses, wins: r.wins } : s;
+                    return `<span class="q">${(QUEUE_TAG[qid] || "q" + qid).toUpperCase()}</span> ${pct(rec.wins / rec.games)} · ${rec.games}g`;
+                  })
                   .join("<br>")
               : `${games ? pct(wins / games) : "–"} · ${games}g`;
             const [name, tag] = p.riotId.split("#");
@@ -2970,14 +2979,23 @@ function renderProfilePane() {
   const chips = D.players.map(x => `<button type="button" class="pf-chip ${x.riotId === profilePlayer ? "active" : ""}" data-pf="${x.riotId}">
       ${avatar(x.riotId)}${x.riotId.split("#")[0]}</button>`).join("");
 
-  // These bars aggregate the matches the tool tracks (the 12-month window),
-  // NOT Riot's season ladder record — the rank line shows that. The title
-  // says so, because the two being different reads as a contradiction.
+  // Solo/flex bars show Riot's current-season ladder record (league-v4) —
+  // the same numbers the client shows — so they agree with the rank line.
+  // Queues without a ladder entry fall back to the tracked-window aggregate.
   const queues = Object.entries(p.queues || {}).sort(([a], [b]) => a - b)
-    .map(([qid, s]) => `<div class="pf-qrow" title="Record across the ${s.games} ${QUEUE_NAME[qid] || ""} games tracked in the tool's 12-month window — Riot's current-season record is on the rank line">
-      <span class="qname">${QUEUE_NAME[qid] || "Queue " + qid}</span>
-      <b>${pct(s.wins / s.games)}</b><div class="wr-bar"><div style="width:${s.wins / s.games * 100}%"></div></div>
-      <span>${s.wins}W ${s.games - s.wins}L</span></div>`).join("");
+    .map(([qid, s]) => {
+      const r = (p.ranks || {})[qid];
+      const seasonal = r && r.tier && (r.wins + r.losses)
+        ? { games: r.wins + r.losses, wins: r.wins } : null;
+      const rec = seasonal || s;
+      const tip = seasonal
+        ? `Riot's current-season ${QUEUE_NAME[qid] || ""} record — the same numbers the client shows`
+        : `Record across the ${s.games} games tracked in the tool's 12-month window (no season rank entry for this queue)`;
+      return `<div class="pf-qrow" title="${tip}">
+        <span class="qname">${QUEUE_NAME[qid] || "Queue " + qid}</span>
+        <b>${pct(rec.wins / rec.games)}</b><div class="wr-bar"><div style="width:${rec.wins / rec.games * 100}%"></div></div>
+        <span>${rec.wins}W ${rec.games - rec.wins}L</span></div>`;
+    }).join("");
 
   const roleRows = ROLES.map(r => {
     const share = playerRoleShare(p.riotId, r);
