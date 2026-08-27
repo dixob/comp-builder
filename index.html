@@ -176,7 +176,14 @@
   .player .name { display: block; font-size: 14px; font-weight: 600;
                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .player .tag { display: block; font-size: 11px; line-height: 16px; color: var(--text-muted); }
-  .player .rank { color: var(--text-secondary); font-weight: 600; }
+  /* the row badge shares its class name with the comps table's numbered
+     circle (.rank below) — undo the circle geometry here or the tier text
+     renders as a clipped 24px blob */
+  .player .rank {
+    display: inline; width: auto; height: auto;
+    background: none; border-radius: 0;
+    color: var(--text-secondary); font-weight: 600; font-size: 11px;
+  }
   .player .rank::before { content: "·"; margin: 0 4px; color: var(--text-muted); font-weight: 400; }
   .qsplit { flex: none; text-align: right; font-size: 11px; line-height: 16px; color: var(--text-secondary); white-space: nowrap; }
   .qsplit .q { color: var(--text-muted); font-weight: 500; font-size: 11px; letter-spacing: 0.06em; }
@@ -2963,8 +2970,12 @@ function renderProfilePane() {
   const chips = D.players.map(x => `<button type="button" class="pf-chip ${x.riotId === profilePlayer ? "active" : ""}" data-pf="${x.riotId}">
       ${avatar(x.riotId)}${x.riotId.split("#")[0]}</button>`).join("");
 
+  // These bars aggregate the matches the tool tracks (the 12-month window),
+  // NOT Riot's season ladder record — the rank line shows that. The title
+  // says so, because the two being different reads as a contradiction.
   const queues = Object.entries(p.queues || {}).sort(([a], [b]) => a - b)
-    .map(([qid, s]) => `<div class="pf-qrow"><span class="qname">${QUEUE_NAME[qid] || "Queue " + qid}</span>
+    .map(([qid, s]) => `<div class="pf-qrow" title="Record across the ${s.games} ${QUEUE_NAME[qid] || ""} games tracked in the tool's 12-month window — Riot's current-season record is on the rank line">
+      <span class="qname">${QUEUE_NAME[qid] || "Queue " + qid}</span>
       <b>${pct(s.wins / s.games)}</b><div class="wr-bar"><div style="width:${s.wins / s.games * 100}%"></div></div>
       <span>${s.wins}W ${s.games - s.wins}L</span></div>`).join("");
 
