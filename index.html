@@ -3265,12 +3265,14 @@ function renderProfilePane() {
         games keep running through this player. The FAQ tab explains the
         score from scratch.</span></span></div>`
     : "";
-  // persistent skill rating from ranking all ten seats of every five-stack
-  const rt = robertRatings().by[p.riotId];
+  // persistent skill rating from ranking all ten seats of every five-stack —
+  // flex-only like the leaderboard, so the same name is the same number on
+  // both surfaces
+  const rt = robertRatings(null, true).by[p.riotId];
   const ratingLine = rt
     ? `<div class="pf-rankline">Robert rating: <b>${(rt.mu - 3 * rt.sigma).toFixed(1)}</b> <span class="dim">(μ ${rt.mu.toFixed(1)} · σ ${rt.sigma.toFixed(2)})</span><span class="info" tabindex="0">i<span class="tip">
         A career rating built on Robert scores, not wins: each of the
-        player's ${rt.games} five-stack game${rt.games === 1 ? "" : "s"}${flexOnly ? " (flex only)" : ""} ranks all ten seats by score,
+        player's ${rt.games} flex five-stack game${rt.games === 1 ? "" : "s"} ranks all ten seats by score,
         and the rating moves by how that finish compared to expectation — a
         carried loss still climbs. Shown as μ−3σ, a cautious floor that
         rewards proven consistency over hot streaks. μ, σ, and the math are
@@ -3356,6 +3358,15 @@ const byLane = rows => [...rows].sort((a, b) => (MH_LANE[a.role] ?? 9) - (MH_LAN
 //    do that: deaths only ever count against a line, and a stat that doesn't
 //    distinguish winners on its own (in practice the within-team shares,
 //    which sum to 1 on both teams) simply gets ~no say.
+//  - KDA enters as log1p((k+a)/(d+1)): the +1 makes a deathless game beat a
+//    one-death game (the old max(1, d) scored them identically), and the log
+//    keeps one 30-KDA stomp from stretching the scale for everyone else.
+//    Both changes also nudge AUC up slightly in every role.
+// Measured on this data the KDA verdict carries most of the weight — the
+// score ranks lines almost identically to a role-normalized KDA percentile
+// (rank correlation 0.93–0.998 by role), with damage/min and CS/min as
+// tiebreakers. That's the data talking, not a bug: KDA is the one scoreboard
+// stat that separates winners within a role. The FAQ says so out loud.
 // Winners still sit high, but a carried loss can crack 90. MVP / worst are
 // picked among OUR five; remakes are skipped and off-role UNKNOWNs use the
 // all-roles fit.
@@ -3368,7 +3379,7 @@ const impComps = (r, t, secs) => {
     r.d / Math.max(1, t.d),             // death share
     (r.dmg || 0) / Math.max(1, t.dmg),  // damage share
     (r.gold || 0) / Math.max(1, t.gold),// gold share
-    (r.k + r.a) / Math.max(1, r.d),     // KDA
+    Math.log1p((r.k + r.a) / (r.d + 1)),// KDA — d+1, log-scaled (see above)
     (r.dmg || 0) / mins,                // damage/min
     r.cs / mins,                        // CS/min
   ];
@@ -3489,7 +3500,13 @@ function gameImpact(g) {
 // carried loss still climbs. Our five persist chronologically; opponents are
 // strangers and enter each game at the default rating. Reported as μ − 3σ,
 // a conservative floor that rewards consistency and punishes thin samples.
+// Before each game a returning player's σ² gets τ² added back (OpenSkill's
+// additive-dynamics term, at the library's mu/300 default): without it σ only
+// ever shrinks and a long career fossilizes — a player whose level genuinely
+// changes could barely move. At ~400 games the effect is a whisper; it exists
+// so the rating stays alive over the long haul.
 const OS_MU = 25, OS_SIG = 25 / 3, OS_BETASQ = (OS_SIG / 2) ** 2, OS_EPS = 1e-4;
+const OS_TAUSQ = (OS_MU / 300) ** 2;
 function plackettLuce(seats) {
   // seats: [{mu, sigma, score}] → updated [{mu, sigma}], same order.
   // Update runs in rank order (ties share a rank) so the prefix sums below
@@ -3545,7 +3562,7 @@ function robertRatings(roles, flexQ) {
       return {
         rid: tracked ? r.rid : null,
         mu: (tracked && by[r.rid]) ? by[r.rid].mu : OS_MU,
-        sigma: (tracked && by[r.rid]) ? by[r.rid].sigma : OS_SIG,
+        sigma: (tracked && by[r.rid]) ? Math.sqrt(by[r.rid].sigma ** 2 + OS_TAUSQ) : OS_SIG,
         score: scores.get(r),
       };
     });
@@ -3561,9 +3578,9 @@ function robertRatings(roles, flexQ) {
 
 // Tiered name for our worst seat, cut where the data actually falls on the
 // 0-100 percentile scale (worst-performer spread over 384 stacks under the
-// per-stat model: median 19, p25 7, p90 55 — someone usually did have a
-// rough one, win or lose):
-//   >50 ~14% · >30 ~18% · >15 ~25% · >5 ~25% · else ~19%
+// per-stat model with the log-KDA feature: median 21, p25 9, p90 55 —
+// someone usually did have a rough one, win or lose):
+//   >50 ~14% · >30 ~22% · >15 ~24% · >5 ~23% · else ~17%
 const worstLabel = s => s > 50 ? "you alright son" : s > 30 ? "malik moment"
   : s > 15 ? "holy stinker" : s > 5 ? "uninstall" : "...";
 
@@ -3571,7 +3588,8 @@ const IMPACT_INFO = `<span class="info" tabindex="0">i<span class="tip">
   The Robert score, 0–100: how much this stat line looks like a winning
   player's, compared against every game we've recorded in the same role.
   Each stat is judged on its own merit and can only count in its natural
-  direction — deaths can never help a line. 50 is a typical game, 74 beats
+  direction — deaths can never help a line — and in practice KDA carries
+  most of the weight. 50 is a typical game, 74 beats
   74% of them; winners usually land high, but a hard-carried loss can still
   crack 90. ★ marks our MVP, ▼ our worst seat (named by how bad it got).
   The FAQ tab explains the whole thing step by step.</span></span>`;
@@ -3865,7 +3883,10 @@ function renderFaqPane() {
         <li><b>Kill participation</b> — the share of your team's kills you had a hand in</li>
         <li><b>Death share</b> — your slice of the team's deaths</li>
         <li><b>Damage share</b> and <b>gold share</b> — your slice of the team's totals</li>
-        <li><b>KDA</b>, <b>damage per minute</b>, <b>CS per minute</b></li>
+        <li><b>KDA</b> — (kills + assists) ÷ (deaths + 1), on a log scale. The +1 means a
+        deathless game genuinely beats a one-death game, and the log keeps one 30-KDA stomp
+        from dwarfing every normal good game</li>
+        <li><b>Damage per minute</b>, <b>CS per minute</b></li>
       </ul>
       <p>Shares instead of raw kills on purpose: they describe <i>your part in the team</i>, not how
       stomp-y the game happened to be.</p>
@@ -3874,9 +3895,9 @@ function renderFaqPane() {
       alone predicts winning (a one-variable logistic regression — think line-of-best-fit, but for
       yes/no outcomes). Each stat is pinned to its natural direction: deaths can only ever count
       against a line, kills can only count for it, and a stat that turns out not to separate winners
-      from losers on its own simply gets almost no say — in practice KDA, damage/min and CS/min
-      carry most of the weight. Your line's seven verdicts are added up and squashed into one win
-      probability.</p>
+      from losers on its own simply gets almost no say — in practice KDA carries most of the weight,
+      with damage/min and CS/min as tiebreakers. Your line's seven verdicts are added up and squashed
+      into one win probability.</p>
       <p>Why not one combined model over all seven numbers at once? It predicts the winner better,
       but it hands out <i>credit</i> through statistical side-channels — on our data it literally
       learned "a bigger share of your team's deaths is a good sign" (because it correlates with
@@ -3887,6 +3908,21 @@ function renderFaqPane() {
       numbers go into your role's model and out comes a probability — but probabilities bunch up,
       so the score you see is that probability's <b>percentile</b>: the fraction of all recorded lines
       in your role that yours beats. That construction is what makes 50 average by definition.</p>`)}
+
+    ${qa("Isn't this mostly just KDA, then?", `
+      <p>Mostly, yes — and we'd rather say it than hide it. Measured on our own data, the final
+      score ranks games almost identically to a plain within-role KDA percentile (rank correlation
+      0.93–0.998 depending on the role; for supports it's essentially exact). That isn't the model
+      being lazy — of the seven stats, KDA is simply the one that separates winning lines from
+      losing lines within a role, so the fit hands it the most weight. The team-share stats mostly
+      cancel out by construction (every team's shares sum to 1, win or lose).</p>
+      <p>So why keep the other six? Three reasons: they break ties among similar-KDA games
+      (damage/min and CS/min do real work there); they're guardrails — if the meta or our data
+      shifts so that KDA stops being the story, the weights re-fit automatically; and each one is
+      sign-pinned, so none can ever count the wrong way.</p>
+      <p>The honest limitation is what <i>no</i> scoreboard stat sees: vision, crowd control, peel,
+      shot-calling. A support who wins the game with wards and hooks is scored only on the numbers
+      Riot writes down.</p>`)}
 
     ${qa("What does “looks like a winner” mean?", `
       <p>The model never sees who won <i>your</i> game — it only sees your seven numbers. But its
@@ -3925,7 +3961,11 @@ function renderFaqPane() {
       <p>The number shown is <b>μ − 3σ</b>, a deliberately conservative floor: "we're about 99.7% sure
       you're <i>at least</i> this good." A player with 30 excellent games still shows a modest floor
       because σ is big; keep posting consistent scores over many games and the floor climbs even
-      when μ barely moves. It rewards proven consistency over a hot streak.</p>`)}
+      when μ barely moves. It rewards proven consistency over a hot streak.</p>
+      <p>One small counterweight: before every game a whisper of uncertainty (<b>τ</b>, OpenSkill's
+      standard dynamics term) is added back into σ. Without it σ only ever shrinks, and after
+      hundreds of games a rating would fossilize — τ keeps it able to respond if someone's level
+      genuinely changes. At our sample sizes its day-to-day effect is negligible.</p>`)}
 
     ${qa("Why did my rating drop after a win (or climb after a loss)?", `
       <p>Because it rates <b>finishes, not results</b>. Win the game while posting our five's lowest
@@ -3944,9 +3984,9 @@ function renderFaqPane() {
         <li>above 30 — <b>"malik moment"</b></li>
         <li>above 15 — <b>"holy stinker"</b></li>
         <li>above 5 — <b>"uninstall"</b></li>
-        <li>5 or below — <b>"..."</b> (~19% of games; condolences)</li>
+        <li>5 or below — <b>"..."</b> (~17% of games; condolences)</li>
       </ul>
-      <p>The worst seat's median is 19 — win or lose, someone usually did have a rough one.</p>`)}
+      <p>The worst seat's median is 21 — win or lose, someone usually did have a rough one.</p>`)}
 
     ${qa("What data feeds all of this?", `
       <p>The squad's Riot match history from the last 12 months — only games where one whole team
