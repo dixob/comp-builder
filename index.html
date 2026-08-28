@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Comp Builder</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z' fill='none' stroke='%23e3b13f' stroke-width='1.6'/%3E%3Ccircle cx='12' cy='12.4' r='3.2' fill='%23e3b13f'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" href="static/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -124,10 +124,9 @@
   .sigil {
     width: 32px; height: 32px; flex: none;
     display: grid; place-items: center;
-    background: var(--accent); color: var(--on-accent);
-    border-radius: 8px;
   }
-  .sigil svg { color: var(--on-accent); width: 18px; height: 18px; }
+  /* the mascot carries its own palette and transparency — no accent box */
+  .sigil img { width: 32px; height: 32px; object-fit: contain; }
   h1 { font-size: 20px; font-weight: 600; margin: 0; line-height: 26px; }
   .tagline { font-size: 12px; line-height: 16px; color: var(--text-secondary); margin-top: 2px; }
   .patchbar { margin-left: auto; display: flex; gap: var(--sp-2); flex-wrap: wrap; }
@@ -1022,10 +1021,7 @@
 <div class="shell">
   <header>
     <div class="sigil">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
-        <path d="M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z"/>
-        <circle cx="12" cy="12.4" r="3.2" fill="currentColor" stroke="none"/>
-      </svg>
+      <img src="static/logo.png" alt="Comp Builder mascot">
     </div>
     <div>
       <h1>Comp Builder</h1>
