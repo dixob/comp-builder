@@ -3502,21 +3502,23 @@ function plackettLuce(seats) {
 }
 
 let impRatings = null;  // cached per feed and per role filter, like the models
-function robertRatings(roles) {
+function robertRatings(roles, flexQ) {
   // With a role filter (a Set of roles), a tracked player's persistent rating
   // only engages for games where they played an in-filter role; every other
   // seat still shapes the finish but joins at the default rating, like the
-  // opponents do. No filter = the plain career rating.
-  const key = roles && roles.size ? [...roles].sort().join("|") : "";
+  // opponents do. No filter = the plain career rating. flexQ restricts the
+  // replay to flex-queue games (the leaderboard is flex-only by design).
+  const roleKey = roles && roles.size ? [...roles].sort().join("|") : "";
+  const key = (flexQ ? "flex|" : "") + roleKey;
   if (!impRatings || impRatings.src !== D.stacks) impRatings = { src: D.stacks, byKey: {} };
   if (impRatings.byKey[key]) return { by: impRatings.byKey[key] };
   const by = impRatings.byKey[key] = {};
   for (const g of [...(D.stacks || [])].sort((a, b) => a.ts - b.ts)) {
-    if (g.secs < REMAKE_SECS) continue;
+    if (g.secs < REMAKE_SECS || (flexQ && g.q !== 440)) continue;
     const { scores } = gameImpact(g);
     if (!scores.size) break;  // dataset too thin for the score models
     const seats = [...g.us, ...g.them].filter(r => scores.has(r)).map(r => {
-      const tracked = r.rid && (!key || roles.has(r.role));
+      const tracked = r.rid && (!roleKey || roles.has(r.role));
       return {
         rid: tracked ? r.rid : null,
         mu: (tracked && by[r.rid]) ? by[r.rid].mu : OS_MU,
@@ -3629,14 +3631,18 @@ let lbRoles = new Set();  // role filter — empty means every role counts
 
 function renderBoardPane() {
   const roleSel = lbRoles.size ? lbRoles : null;
-  // per-player aggregates over all tracked games — from the champ records'
-  // role splits when a filter is on, whole champ records otherwise
+  // The whole board is flex-only by design — solo-queue heroics never count
+  // here. In the full view that means the champ records' "440" queue slice
+  // (in the flex-only view the records already ARE that slice), and the
+  // five-stack loops skip the odd clash game.
   const players = D.players.map(p => {
     const t = { games: 0, wins: 0, k: 0, d: 0, as: 0, kg: 0, cs: 0, secs: 0, dmg: 0, dsecs: 0 };
     for (const c of p.champions) {
+      const src = flexOnly ? c : c.q && c.q["440"];
+      if (!src || !src.games) continue;
       const parts = roleSel
-        ? Object.entries(c.roles || {}).filter(([role]) => roleSel.has(role)).map(([, s]) => s)
-        : [c];
+        ? Object.entries(src.roles || {}).filter(([role]) => roleSel.has(role)).map(([, s]) => s)
+        : [src];
       for (const s of parts) {
         t.games += s.games; t.wins += s.wins;
         t.k += s.k || 0; t.d += s.d || 0; t.as += s.a || 0; t.kg += s.kg || 0;
@@ -3650,7 +3656,7 @@ function renderBoardPane() {
   // under a filter only the player's in-filter games count, MVP/worst included
   const agg = {};
   for (const g of D.stacks || []) {
-    if (g.secs < REMAKE_SECS) continue;
+    if (g.secs < REMAKE_SECS || g.q !== 440) continue;
     const gi = gameImpact(g);
     const tot = impTotals(g.us);
     for (const r of g.us) {
@@ -3663,7 +3669,7 @@ function renderBoardPane() {
       a.kpN += 1;
     }
   }
-  const ratings = robertRatings(roleSel).by;
+  const ratings = robertRatings(roleSel, true).by;
 
   const val = {
     player: r => r.rid.split("#")[0].toLowerCase(),
@@ -3688,16 +3694,16 @@ function renderBoardPane() {
 
   const COLS = [
     ["player", "Player", "Click a row for the full profile"],
-    ["games", "Games", "Tracked games in the 12-month window (solo + flex + clash)"],
-    ["wr", "Win rate", "Across every tracked game"],
-    ["kda", "KDA", "(kills + assists) / deaths, summed over every tracked game"],
-    ["dpm", "DPM", "Damage to champions per minute, every tracked game"],
-    ["csm", "CS/m", "Creep score per minute, every tracked game"],
-    ["kp", "KP", "Average kill participation — five-stack games only"],
-    ["avg", "Avg Robert", "Average Robert score (0–100, 50 = typical) over five-stack games — see the FAQ"],
+    ["games", "Games", "Flex games in the 12-month window"],
+    ["wr", "Win rate", "Across every tracked flex game"],
+    ["kda", "KDA", "(kills + assists) / deaths, summed over every tracked flex game"],
+    ["dpm", "DPM", "Damage to champions per minute, every tracked flex game"],
+    ["csm", "CS/m", "Creep score per minute, every tracked flex game"],
+    ["kp", "KP", "Average kill participation — flex five-stacks only"],
+    ["avg", "Avg Robert", "Average Robert score (0–100, 50 = typical) over flex five-stacks — see the FAQ"],
     ["mvp", "★ MVP", "Games as our five's top Robert score"],
     ["worst", "▼ Worst", "Games as our five's lowest Robert score"],
-    ["rating", "Robert rating", "μ−3σ skill rating from ranking all ten seats of every five-stack — see the FAQ"],
+    ["rating", "Robert rating", "μ−3σ skill rating from ranking all ten seats of every flex five-stack — see the FAQ"],
   ];
   const head = COLS.map(([k, label, tip]) =>
     `<th class="sortable${lbSort.key === k ? " sorted" : ""}" data-lbsort="${k}" title="${tip}">
@@ -3731,8 +3737,8 @@ function renderBoardPane() {
 
   $("#ranked").innerHTML = `
     ${roleChips}
-    <div class="hint" style="margin-bottom:10px">Click a column to re-rank${flexOnly ? " — flex games only" : ""}${roleSel ? `; counting only games played as ${[...lbRoles].map(r => ROLE_LABEL[r]).join(" / ")}` : ""}.
-      Win rate, KDA, DPM and CS/m cover every tracked game; KP, Robert score and rating only exist for five-stacks.
+    <div class="hint" style="margin-bottom:10px">Flex games only. Click a column to re-rank${roleSel ? ` — counting only games played as ${[...lbRoles].map(r => ROLE_LABEL[r]).join(" / ")}` : ""}.
+      Win rate, KDA, DPM and CS/m cover every tracked flex game; KP, Robert score and rating only exist for five-stacks.
       Filter by role to compare like for like — a support's CS/m only makes sense against other support games.</div>
     <div class="pf-sec"><table>
       <tr><th></th>${head}</tr>
@@ -3774,7 +3780,7 @@ function renderFaqPane() {
   let caseBox = "";
   if (CASE.every(rid => D.players.some(p => p.riotId === rid))) {
     const cs = {};
-    for (const g of real) {
+    for (const g of real.filter(g => g.q === 440)) {
       const gi = gameImpact(g);
       if (!gi.scores.size) break;
       const all = [...g.us, ...g.them].filter(r => gi.scores.has(r))
@@ -3795,17 +3801,18 @@ function renderFaqPane() {
         .sort((x, y) => y[1].n - x[1].n)
         .map(([r, v]) => `${ROLE_LABEL[r]} <b>${(v.s / v.n).toFixed(1)}</b> (${v.n}g)`).join(" · ");
       caseBox = qa("Why does SecondComing out-rate fallenbanditfan when fallenbanditfan's stats look better?", `
-        <p>Because they're different pools of games, judged per role. The leaderboard's KDA, DPM and
-        win-rate columns cover <b>every tracked game, solo queue included</b> — where fallenbanditfan
-        racks up big damage numbers. The Robert score and rating only see the <b>five-stacks</b>, and
-        there the gap flips: SecondComing averages <b>${avg(sc)}</b> (typical finish ${fin(sc)} of 10
-        over ${sc.n} games) against fallenbanditfan's <b>${avg(fbf)}</b> (finish ${fin(fbf)} of 10 over
-        ${fbf.n}). The rating just accumulates those finishes.</p>
-        <p>The per-role averages show where it comes from —</p>
+        <p>Because "looks better" usually means raw damage, and the score deliberately doesn't rate
+        that — it rates <b>how good the line was for the seat it was played in</b>. Across our flex
+        five-stacks SecondComing averages <b>${avg(sc)}</b> (typical finish ${fin(sc)} of 10 over
+        ${sc.n} games) against fallenbanditfan's <b>${avg(fbf)}</b> (finish ${fin(fbf)} of 10 over
+        ${fbf.n}), and the rating just accumulates those finishes.</p>
+        <p>The per-role averages show where the gap comes from —</p>
         <p>fallenbanditfan: ${roleLine(fbf)}<br>SecondComing: ${roleLine(sc)}</p>
-        <p>Raw DPM flatters damage roles, and the per-role percentile deliberately removes that:
-        a tanky top line that looks unimpressive can still be a great <i>top</i> line, while big
-        damage in a jungle or support seat doesn't make it a good jungle or support line.</p>
+        <p>fallenbanditfan's mid and bot games really are excellent — but a big share of his games
+        come in the jungle and support seats, where his lines rank below average <i>for those
+        seats</i>, and that mix pulls the career number down. SecondComing plays most of his games
+        in his best seats, and a tanky top line that looks unimpressive as raw damage can still be
+        a great <i>top</i> line.</p>
         <p>Honest footnote: fallenbanditfan's five-stack win rate is actually higher
         (${wr(fbf)} vs ${wr(sc)}) — but the rating ignores W/L by design, and the seven features
         can't see vision, CC or peel, so a utility-heavy style is probably a little undervalued.</p>`);
