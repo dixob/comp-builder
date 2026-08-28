@@ -30,6 +30,14 @@ is scored too.
 which role and let it optimize the champions, or let it optimize the full
 role assignment.
 
+In Draft mode (bans and enemy picks entered by hand, or streamed live from
+champ select by `lcu_bridge.py`) the estimated win rate becomes a ticker: the
+number animates on every draft event, a delta chip attributes each move to
+what caused it ("▼ −6.9pp · Aurora banned"), and a sparkline tracks the whole
+draft — hover a dot for the event behind it. Each enemy pick also gets a
+**Best answers** row: the lane player's strongest meta matchups into it,
+drawn from their own filtered champion pool; tapping one locks it in.
+
 ## Refreshing the data
 
 ```

@@ -286,6 +286,25 @@
   .pos { color: var(--positive); font-weight: 600; }
   .neg { color: var(--negative); font-weight: 600; }
   .breakdown .pos, .breakdown .neg { font-weight: 600; }
+  /* the number flashes toward the direction it moved, then settles back */
+  .hero-num.up { animation: heroUp 900ms; }
+  .hero-num.down { animation: heroDown 900ms; }
+  @keyframes heroUp { 0%, 55% { color: var(--positive); } 100% { color: var(--text-primary); } }
+  @keyframes heroDown { 0%, 55% { color: var(--negative); } 100% { color: var(--text-primary); } }
+  .hero-delta {
+    font-size: 12px; line-height: 16px; font-weight: 600;
+    border-radius: 999px; padding: 3px 10px; background: var(--layer-2);
+  }
+  .hero-delta.pos { color: var(--positive); background: var(--positive-dim); }
+  .hero-delta.neg { color: var(--negative); background: var(--negative-dim); }
+  .hero-delta .cause { font-weight: 400; color: var(--text-secondary); }
+  .wintrend { margin-top: var(--sp-3); }
+  .wintrend svg { display: block; width: 100%; height: 36px; }
+  .wt-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  .wt-guide { stroke: var(--outline-variant); stroke-width: 1; stroke-dasharray: 3 3; }
+  .wt-dot { fill: var(--accent); opacity: 0.65; }
+  .wt-dot.last { opacity: 1; }
+  .wt-cap { font-size: 11px; line-height: 16px; color: var(--text-muted); margin-top: 2px; }
 
   /* ---- draft board ---- */
   .board-head { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); flex-wrap: wrap; }
@@ -476,6 +495,24 @@
   .dchip-fear { border-color: var(--outline); background: var(--layer-2); }
   .dchip-fear img { filter: grayscale(0.7); }
   .dchip.live { border-color: var(--positive); }
+  /* best-answer chips: our counter picks against a specific enemy pick */
+  .answer-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+  .ans-vs {
+    display: inline-flex; align-items: center; gap: 6px; flex: none;
+    min-width: 140px; font-size: 12px; line-height: 16px; color: var(--text-secondary);
+  }
+  .ans-vs img { width: 20px; height: 20px; border-radius: 5px; }
+  .ans-vs b { color: var(--text-primary); font-weight: 600; }
+  .achip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font: inherit; font-size: 12px; line-height: 16px; font-weight: 600;
+    background: var(--layer-2); border: 1px solid var(--outline-variant);
+    border-radius: 999px; padding: 2px 9px 2px 2px;
+    color: var(--text-primary); cursor: pointer;
+  }
+  .achip img { width: 20px; height: 20px; border-radius: 999px; }
+  .achip:hover { border-color: var(--accent); }
+  .achip.current { border-color: var(--accent); background: var(--accent-dim); }
   .dchip button {
     font: inherit; background: none; border: none; cursor: pointer;
     color: var(--text-secondary); padding: 0 4px; border-radius: 50%;
@@ -1154,6 +1191,13 @@ let fearlessPicks = JSON.parse(localStorage.getItem("fearlessPicks") || "[]");
 let fearlessChamps = new Set(fearlessPicks.map(p => p.championId));
 const effFearless = () => draftMode && fearless ? fearlessChamps : new Set();
 let autoSwapNote = null;     // "Tristana → Kai'Sa" — last automatic dead-pick swap
+// Win-probability ticker: the hero number animates between values, a delta
+// chip names what moved it, and a per-draft log feeds the trend sparkline.
+let heroShown = null;        // the total the hero number currently displays
+let heroAnim = null;         // in-flight rAF handle for the count animation
+let winLog = [];             // [{total, label}] — one point per score change this draft
+let lastDraftEvent = null;   // "Zed banned" — consumed by renderScore for attribution
+const noteEvent = label => { lastDraftEvent = label; };
 let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
 let dAdjCache = {};
 const MATCHUP_WEIGHT = 1;      // matchup deltas are already small; cap below
@@ -1280,6 +1324,7 @@ function ensureCounters(cid, role) {
       const map = {};
       for (const c of j.counters) map[c.champion_id] = c;
       counterIdx[key] = map;
+      noteEvent(champName(cid) + " matchups loaded");
       draftChanged(false);
     })
     .catch(() => {});
@@ -1887,9 +1932,11 @@ function render() {
           <h2>Estimated win rate</h2>
           <div class="hero-row">
             <span class="hero-num" id="hero">–</span>
+            <span class="hero-delta" id="heroDelta" hidden></span>
             <span class="verdict" id="verdict" hidden></span>
           </div>
           <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
+          <div class="wintrend" id="winTrend" hidden></div>
           <div class="breakdown" id="breakdown"></div>
         </div>
         <div class="card" id="riftCard" hidden></div>
@@ -2004,6 +2051,44 @@ function render() {
 // The draft tool IS the rift card: picks live on the map (enemy pins open a
 // lane/remove popover), bans sit in a compact strip below it, and the two
 // inputs stay for fast entry during a timed ban phase.
+// Best answers: for each enemy pick, the strongest meta counters among the
+// champs the lane's player could actually lock — their candidate list, so the
+// mastery/games filters, bans, taken champs, and fearless exclusions already
+// apply. Ranked by the lane matchup record alone (the candidates are all
+// picks the player is good on; this orders them by who they beat). Tapping a
+// chip locks it into the slot, exactly like picking it by hand.
+function answersBlock() {
+  const rows = [];
+  for (const [ecid, a] of enemyLaneMap()) {
+    ensureCounters(ecid, a.role);  // the assigned lane can be one laneDist never listed
+    const i = ROLES.indexOf(a.role);
+    const player = i >= 0 && slots[i].player;
+    if (!player) continue;
+    const opts = [];
+    for (const cid of candidates(player, a.role, 15)) {
+      const rec = matchupRec(ecid, cid, a.role);
+      if (!rec || rec.play < 20) continue;
+      opts.push({ cid, wr: 1 - rec.win / rec.play, play: rec.play });
+    }
+    opts.sort((x, y) => y.wr - x.wr);
+    const top = opts.slice(0, 3);
+    rows.push(`<div class="answer-row">
+      <span class="ans-vs"><img src="${champIcon(ecid)}" alt=""><span>vs <b>${champName(ecid)}</b>
+        <span class="dim">${ROLE_LABEL[a.role].toLowerCase()}${a.locked ? "" : "?"}</span></span></span>
+      ${top.length
+        ? top.map(t => `<button class="achip${slots[i].champ === t.cid ? " current" : ""}" data-answer="${i}:${t.cid}"
+            title="${champName(t.cid)}: ${pct(t.wr)} into ${champName(ecid)} over ${t.play.toLocaleString()} meta games — tap to lock it in for ${player.split("#")[0]}">
+            <img src="${champIcon(t.cid)}" alt="${champName(t.cid)}"><span class="${t.wr > 0.505 ? "pos" : t.wr < 0.495 ? "neg" : ""}">${pct(t.wr)}</span>
+          </button>`).join("")
+        : `<span class="dim" style="font-size:12px">no matchup data yet</span>`}
+    </div>`);
+  }
+  if (!rows.length) return "";
+  return `<div class="answers">
+    <div class="hint" style="margin:8px 0 2px">Best answers — the lane player's strongest meta matchups into each enemy pick. Tap one to lock it in.</div>
+    ${rows.join("")}</div>`;
+}
+
 function renderDraft() {
   const el = $("#riftCard");
   if (!el) return;
@@ -2048,6 +2133,7 @@ function renderDraft() {
       || `<span class="hint" style="margin:0">no finished flex games in the session yet</span>`}
     </div>` : ""}
     <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Tap a blue pin to lock that pick in — re-optimizing picks around it. Drag one onto another lane to swap roles.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
+    ${enemy.length ? answersBlock() : ""}
     ${enemy.length && PROFILES
       ? `<div class="hint" style="margin:2px 0 6px">Their comp so far (${enemy.length}/5) — picks get matchup nudges vs whoever might lane against them:</div>` + profileHTML(enemy)
       : `<div class="hint">Banned and enemy-picked champs drop out of candidates and the optimizer. Run <code>python3 lcu_bridge.py</code> next to the League client to sync this automatically.</div>`}
@@ -2070,10 +2156,14 @@ function renderDraft() {
     inp.addEventListener("change", commit);
     inp.addEventListener("keydown", e => { if (e.key === "Enter") commit(); });
   };
-  wire("#banInput", cid => manualBans.add(cid));
+  wire("#banInput", cid => {
+    manualBans.add(cid);
+    noteEvent(champName(cid) + " banned");
+  });
   wire("#enemyInput", cid => {
     manualEnemy.add(cid);
     ensureEnemyCounters(cid);
+    noteEvent("enemy locked " + champName(cid));
   });
   el.querySelector("#fearlessBtn").addEventListener("click", () => {
     fearless = !fearless;
@@ -2107,13 +2197,46 @@ function renderDraft() {
     counterDismissed.clear();
     allyLock.clear();
     for (const cid of [...enemyRole.keys()]) if (!liveEnemy.has(cid)) enemyRole.delete(cid);
+    winLog = [];  // the trend belonged to the draft that was just wiped
+    noteEvent("draft cleared");
     draftChanged();
   });
   el.querySelectorAll("[data-remove]").forEach(b => b.addEventListener("click", () => {
     const [kind, cid] = b.dataset.remove.split(":");
     (kind === "ban" ? manualBans : manualEnemy).delete(+cid);
+    noteEvent(champName(+cid) + (kind === "ban" ? " ban removed" : " pick removed"));
     draftChanged();
   }));
+  wireAnswers(el);
+}
+
+function wireAnswers(el) {
+  el.querySelectorAll("[data-answer]").forEach(b => b.addEventListener("click", () => {
+    const [i, cid] = b.dataset.answer.split(":").map(Number);
+    autoSwapNote = null;
+    slots[i].champ = cid;
+    allyLock.set(ROLES[i], cid);  // an answer chosen mid-draft is a lock, like a hand pick
+    noteEvent("picked " + champName(cid));
+    rankedTabs.assigned = null;
+    candCache = {};  // a lock changes what the other four may pick
+    renderDraft(); renderSlots(); renderScore();
+  }));
+}
+
+// Patch just the answers block in place — for updates (async matchup tables
+// landing) that must not rebuild the whole rift card while the user might be
+// typing into its ban/enemy inputs.
+function refreshAnswers() {
+  const el = $("#riftCard");
+  if (!el || !draftMode) return;
+  const cur = el.querySelector(".answers");
+  if (!cur) return;  // no block yet — the next full renderDraft creates it
+  const tmp = document.createElement("div");
+  tmp.innerHTML = answersBlock();
+  if (tmp.firstElementChild) {
+    cur.replaceWith(tmp.firstElementChild);
+    wireAnswers(el);
+  }
 }
 
 function updateLiveIndicator() {
@@ -2537,6 +2660,7 @@ function draftChanged(rerenderCard = true) {
     if (swaps) autoSwapNote = `auto-swapped ${swaps.join(", ")} — pick was banned, taken, or hard-countered`;
   }
   if (rerenderCard) renderDraft();
+  else refreshAnswers();
   renderSlots();
   renderScore();
   // a live update can land while a data page is showing — the builder's tab
@@ -2557,6 +2681,18 @@ function riotIdForLive(riotId) {
 function applyLiveDraft(j) {
   if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); return; }
   const wasActive = liveDraft.active;
+  // Name what just landed before the sets are replaced — the win ticker's
+  // delta chip and trend tooltips attribute the move to it.
+  if (j.active) {
+    const ev = [];
+    for (const c of j.bans || []) if (!liveBans.has(c)) ev.push(champName(c) + " banned");
+    for (const c of j.enemy || []) if (!liveEnemy.has(c)) ev.push("enemy locked " + champName(c));
+    const oursPrev = new Set(liveOurs.map(p => p.championId).filter(Boolean));
+    for (const p of j.ours || [])
+      if (p.championId && !oursPrev.has(p.championId)) ev.push(champName(p.championId) + " locked");
+    if (ev.length) noteEvent(ev.slice(0, 2).join(", ") + (ev.length > 2 ? ` +${ev.length - 2} more` : ""));
+    if (!wasActive) winLog = [];  // a fresh champ select starts a fresh trend
+  } else if (wasActive) winLog = [];
   liveDraft = j;
   liveBans = new Set(j.active ? j.bans || [] : []);
   liveEnemy = new Set(j.active ? j.enemy || [] : []);
@@ -2695,6 +2831,7 @@ async function fetchFearless() {
         fearlessPicks = picks;
         fearlessChamps = new Set(picks.map(p => p.championId));
         localStorage.setItem("fearlessPicks", JSON.stringify(picks));
+        noteEvent("fearless exclusions updated");
         draftChanged();
       }
     }
@@ -2901,6 +3038,7 @@ function renderSlots() {
     }
     else {
       slots[i].champ = e.target.value ? +e.target.value : null;
+      if (slots[i].champ != null) noteEvent("picked " + champName(slots[i].champ));
       // Choosing a champion by hand mid-draft is the act of locking it: the
       // next ban has to re-optimize around the pick, not delete it.
       if (draftMode && slots[i].champ != null) allyLock.set(ROLES[i], slots[i].champ);
@@ -2921,6 +3059,50 @@ function renderSlots() {
   renderRift();
 }
 
+// Animate the hero number from what it shows to `total`: a quick eased count
+// with a green/red flash in the direction of the move. Instant on first paint.
+function setHero(total) {
+  const el = $("#hero");
+  const prev = heroShown;
+  heroShown = total;
+  if (heroAnim) { cancelAnimationFrame(heroAnim); heroAnim = null; }
+  el.classList.remove("up", "down");
+  if (prev == null || Math.abs(total - prev) < 0.0005) { el.textContent = pct(total); return; }
+  void el.offsetWidth;  // restart the flash even if the class was just removed
+  el.classList.add(total > prev ? "up" : "down");
+  const t0 = performance.now(), dur = 600;
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = pct(prev + (total - prev) * e);
+    heroAnim = k < 1 ? requestAnimationFrame(step) : null;
+  };
+  heroAnim = requestAnimationFrame(step);
+}
+
+// The draft's win probability over time — one point per score change, hover a
+// dot for the event that caused it. Pure presentation of numbers already shown.
+function trendSVG() {
+  const W = 300, H = 32;
+  const vals = winLog.map(p => p.total);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const mid = (lo + hi) / 2, span = Math.max(hi - lo, 0.04) / 2 + 0.005;
+  lo = mid - span; hi = mid + span;
+  const x = i => (winLog.length > 1 ? i / (winLog.length - 1) : 0.5) * (W - 8) + 4;
+  const y = v => H - 3 - (v - lo) / (hi - lo) * (H - 6);
+  const guide = lo < 0.5 && 0.5 < hi
+    ? `<line class="wt-guide" x1="0" x2="${W}" y1="${y(0.5).toFixed(1)}" y2="${y(0.5).toFixed(1)}"/>` : "";
+  const pts = winLog.map((p, i) => `${x(i).toFixed(1)},${y(p.total).toFixed(1)}`).join(" ");
+  const dots = winLog.map((p, i) =>
+    `<circle class="wt-dot${i === winLog.length - 1 ? " last" : ""}" cx="${x(i).toFixed(1)}"
+       cy="${y(p.total).toFixed(1)}" r="${i === winLog.length - 1 ? 2.5 : 1.8}">
+       <title>${pct(p.total)}${p.label ? " — " + p.label : ""}</title></circle>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+      aria-label="win probability across this draft">
+      ${guide}<polyline class="wt-line" points="${pts}" vector-effect="non-scaling-stroke"/>${dots}</svg>
+    <div class="wt-cap">this draft · ${winLog.length} moves</div>`;
+}
+
 function renderScore() {
   if (!$("#hero")) return;  // a data page is showing — the score card isn't rendered
   renderProfile();
@@ -2929,14 +3111,38 @@ function renderScore() {
     && new Set(assign.map(a => a.player)).size === 5
     && new Set(assign.map(a => a.champ)).size === 5;
   const verdictEl = $("#verdict");
+  const trendEl = $("#winTrend");
+  trendEl.hidden = !(draftMode && winLog.length >= 2);
+  if (!trendEl.hidden) trendEl.innerHTML = trendSVG();
   if (!ready) {
+    if (heroAnim) { cancelAnimationFrame(heroAnim); heroAnim = null; }
+    heroShown = null;
     $("#hero").textContent = "–"; $("#meter").style.width = "0%";
+    $("#heroDelta").hidden = true;
     verdictEl.hidden = true;
     $("#breakdown").textContent = "Fill all five slots (distinct players and champions).";
     return;
   }
   const sc = compScore(assign);
-  $("#hero").textContent = pct(sc.total);
+  const prevTotal = heroShown;
+  const cause = lastDraftEvent;
+  lastDraftEvent = null;
+  setHero(sc.total);
+  const dEl = $("#heroDelta");
+  if (prevTotal != null && Math.abs(sc.total - prevTotal) >= 0.0005) {
+    const d = sc.total - prevTotal;
+    dEl.hidden = false;
+    dEl.className = "hero-delta " + (d > 0 ? "pos" : "neg");
+    dEl.innerHTML = `${d > 0 ? "▲ +" : "▼ −"}${(Math.abs(d) * 100).toFixed(1)}pp`
+      + (cause ? ` <span class="cause">· ${cause}</span>` : "");
+  } else if (prevTotal == null) dEl.hidden = true;
+  if (draftMode && (!winLog.length
+      || Math.abs(winLog[winLog.length - 1].total - sc.total) >= 0.0005)) {
+    winLog.push({ total: sc.total, label: cause });
+    if (winLog.length > 80) winLog.shift();
+    trendEl.hidden = winLog.length < 2;
+    if (!trendEl.hidden) trendEl.innerHTML = trendSVG();
+  }
   $("#meter").style.width = (sc.total * 100) + "%";
   // A banned or enemy-taken champ makes the whole estimate fiction — say so
   // where the user is actually looking instead of only in one slot's fine print.
@@ -2986,6 +3192,7 @@ function renderScore() {
     `come from the same games, so hot streaks inflate both.</span></span>`;
   document.querySelectorAll("[data-cswap]").forEach(b => b.addEventListener("click", () => {
     counterAvoid.add(+b.dataset.cswap);
+    noteEvent("drafting around " + champName(+b.dataset.cswap));
     candCache = {};
     draftChanged(false);
   }));
@@ -4184,6 +4391,7 @@ function runOptimize() {
   // both entry points to the full search are hidden while the lock is on;
   // this keeps any other path (keyboard, stale handler) honest
   if (rolesLocked()) return runOptimizeChamps();
+  noteEvent("optimized comp");
   releaseDeadLocks();
   const { fixed, pinPlayer } = lockPins();
   rankedTabs.overall = optimize(10, fixed, pinPlayer);
@@ -4194,6 +4402,7 @@ function runOptimize() {
 }
 
 function runOptimizeChamps() {
+  noteEvent("optimized champs");
   releaseDeadLocks();
   rankedTabs.assigned = optimizeChamps(10, lockPins().fixed);
   if (rankedTabs.assigned) applyComp(rankedTabs.assigned[0]);
@@ -4398,7 +4607,7 @@ function initDraftToggle() {
     localStorage.setItem("draftMode", draftMode ? "1" : "0");
     t.classList.toggle("active", draftMode);
     document.body.classList.toggle("drafting", draftMode);
-    if (!draftMode) allyLock.clear();  // locks are draft-scoped, like the bans
+    if (!draftMode) { allyLock.clear(); winLog = []; }  // locks and the trend are draft-scoped, like the bans
     setDraftLive(draftMode);
     draftChanged();
   });
