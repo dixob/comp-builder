@@ -3962,6 +3962,10 @@ function renderFaqPane() {
       you're <i>at least</i> this good." A player with 30 excellent games still shows a modest floor
       because σ is big; keep posting consistent scores over many games and the floor climbs even
       when μ barely moves. It rewards proven consistency over a hot streak.</p>
+      <p>One nuance: μ updates game by game, so it tracks <b>current form</b>, not the career
+      average — a rough stretch long ago fades as newer finishes pile on top. That's how a player
+      whose average Robert score is lower can still out-rate someone: if their recent finishes are
+      better (and their σ smaller from more games), the rating believes the newer evidence.</p>
       <p>One small counterweight: before every game a whisper of uncertainty (<b>τ</b>, OpenSkill's
       standard dynamics term) is added back into σ. Without it σ only ever shrinks, and after
       hundreds of games a rating would fossilize — τ keeps it able to respond if someone's level
