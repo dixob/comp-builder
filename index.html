@@ -734,7 +734,9 @@
   .mh-detail td { padding: 3px 8px; background: var(--layer-2); }
   .mh-detail td:first-child { border-radius: 8px 0 0 8px; }
   .mh-detail td:last-child { border-radius: 0 8px 8px 0; }
-  .mh-detail .wr-cell span { min-width: 42px; white-space: nowrap; }
+  /* wide enough for "29.3k (1438)" so every damage bar starts at the same x
+     and the lengths actually compare */
+  .mh-detail .wr-cell span { min-width: 12ch; white-space: nowrap; }
   /* flex-basis 0 means the auto-layout table never grows the damage column
      for the bar — a floor keeps it a real bar when the table is content-
      sized (the phone breakpoint, where the scoreboard scrolls sideways) */
