@@ -3339,15 +3339,24 @@ const byLane = rows => [...rows].sort((a, b) => (MH_LANE[a.role] ?? 9) - (MH_LAN
 
 // --- impact score (shown as "Robert score") --------------------------------
 // PandaSkill's recipe (arXiv:2501.10049) scaled down to a scoreboard row.
-// A per-role logistic model, fit on every recorded five-stack (both teams —
-// 10 rows per game), learns which end-game lines win games; a player's score
-// is the percentile of their line's predicted win chance among all recorded
+// Per-role models, fit on every recorded five-stack (both teams — 10 rows
+// per game), rate how much a line looks like a winning player's; a player's
+// score is the percentile of that predicted win chance among all recorded
 // lines for their ROLE, 0..100 — 74 means the line beats 74% of recorded
-// games in the role. Features are contribution-shaped on purpose — kill
-// participation, death/damage/gold shares within the team, KDA, damage/min,
-// CS/min — NOT raw kills or gold/min, which merely re-detect the outcome
-// (AUC 0.99) and collapse the score to "did you win". Winners still sit high
-// (they earned the stats), but a carried loss can crack 90. MVP / worst are
+// games in the role. Two deliberate restrictions keep the credit honest:
+//  - Features are contribution-shaped (kill participation, death/damage/gold
+//    shares, KDA, damage/min, CS/min) — NOT raw kills or gold/min, which
+//    merely re-detect the outcome (AUC 0.99) and collapse the score to "did
+//    you win".
+//  - Each stat is fit ALONE (one univariate logistic per feature, verdicts
+//    summed), clipped to its natural sign. A joint fit scores better on
+//    paper (AUC 0.96 vs 0.84) but hands out credit through collinearity
+//    artifacts — it learned "death share helps, kill participation hurts"
+//    and gave a 3/11 line an 82 over a 24/6 line's 64. Marginal fits can't
+//    do that: deaths only ever count against a line, and a stat that doesn't
+//    distinguish winners on its own (in practice the within-team shares,
+//    which sum to 1 on both teams) simply gets ~no say.
+// Winners still sit high, but a carried loss can crack 90. MVP / worst are
 // picked among OUR five; remakes are skipped and off-role UNKNOWNs use the
 // all-roles fit.
 const impTotals = rows => rows.reduce((t, r) => ({ k: t.k + r.k, d: t.d + r.d,
@@ -3366,31 +3375,45 @@ const impComps = (r, t, secs) => {
 };
 const IMP_MIN_ROWS = 100;  // below this the fit is noise — no scores at all
 const IMP_ROLE_MIN = 40;   // thinner roles fall back to the all-roles fit
+// natural direction per feature — a stat may only count this way (or not at
+// all); order matches impComps
+const IMP_SIGNS = [1, -1, 1, 1, 1, 1, 1];
 
-// standardized logistic regression by batch gradient descent — deterministic;
-// 800 iterations is converged for these sizes (checked against 2000)
-function logitFit(X, y) {
-  const n = X.length, m = X[0].length;
-  const mean = new Array(m).fill(0), sd = new Array(m).fill(0);
-  for (const x of X) for (let j = 0; j < m; j++) mean[j] += x[j] / n;
-  for (const x of X) for (let j = 0; j < m; j++) sd[j] += (x[j] - mean[j]) ** 2 / n;
-  for (let j = 0; j < m; j++) sd[j] = Math.sqrt(sd[j]) || 1;
-  const Z = X.map(x => x.map((v, j) => (v - mean[j]) / sd[j]));
-  const w = new Array(m + 1).fill(0);
-  for (let t = 0; t < 800; t++) {
-    const g = new Array(m + 1).fill(0);
+// one standardized univariate logistic per stat, by projected gradient
+// descent — deterministic, sign-clipped each step, converged well within
+// 400 iterations at these sizes
+function statFit(v, y, sign) {
+  const n = v.length;
+  let mean = 0, sd = 0;
+  for (const x of v) mean += x / n;
+  for (const x of v) sd += (x - mean) ** 2 / n;
+  sd = Math.sqrt(sd) || 1;
+  let w = 0, b = 0;
+  for (let t = 0; t < 400; t++) {
+    let gw = 0, gb = 0;
     for (let i = 0; i < n; i++) {
-      let z = w[m];
-      for (let j = 0; j < m; j++) z += w[j] * Z[i][j];
+      const z = w * (v[i] - mean) / sd + b;
       const e = 1 / (1 + Math.exp(-z)) - y[i];
-      for (let j = 0; j < m; j++) g[j] += e * Z[i][j];
-      g[m] += e;
+      gw += e * (v[i] - mean) / sd;
+      gb += e;
     }
-    for (let j = 0; j <= m; j++) w[j] -= g[j] / n;
+    w -= gw / n;
+    b -= gb / n;
+    w = sign > 0 ? Math.max(0, w) : Math.min(0, w);
   }
-  return { predict: x => {
-    let z = w[m];
-    for (let j = 0; j < m; j++) z += w[j] * (x[j] - mean[j]) / sd[j];
+  return { w, b, mean, sd };
+}
+
+// a role's model: seven per-stat verdicts (log-odds), summed and squashed
+function roleModel(rows) {
+  const stats = IMP_SIGNS.map((sign, j) =>
+    statFit(rows.map(r => r.x[j]), rows.map(r => r.win), sign));
+  return { stats, predict(x) {
+    let z = 0;
+    for (let j = 0; j < x.length; j++) {
+      const f = this.stats[j];
+      z += f.w * (x[j] - f.mean) / f.sd + f.b / x.length;
+    }
     return 1 / (1 + Math.exp(-z));
   } };
 }
@@ -3415,7 +3438,7 @@ function robertModels() {
     impModel.fits = {};
     for (const [role, rows] of Object.entries(byRole)) {
       if (role !== "_all" && rows.length < IMP_ROLE_MIN) continue;
-      const fit = logitFit(rows.map(r => r.x), rows.map(r => r.win));
+      const fit = roleModel(rows);
       // percentile lookup table: every recorded line's predicted win chance
       fit.sorted = rows.map(r => fit.predict(r.x)).sort((a, b) => a - b);
       impModel.fits[role] = fit;
@@ -3537,19 +3560,21 @@ function robertRatings(roles, flexQ) {
 }
 
 // Tiered name for our worst seat, cut where the data actually falls on the
-// 0-100 percentile scale (worst-performer spread over 384 stacks: median 42,
-// p25 12, p90 78 — a won game usually keeps even the worst seat above 60):
-//   >60 ~30% · >40 ~21% · >20 ~15% · >7 ~16% · else ~17%
-const worstLabel = s => s > 60 ? "you alright son" : s > 40 ? "malik moment"
-  : s > 20 ? "holy stinker" : s > 7 ? "uninstall" : "...";
+// 0-100 percentile scale (worst-performer spread over 384 stacks under the
+// per-stat model: median 19, p25 7, p90 55 — someone usually did have a
+// rough one, win or lose):
+//   >50 ~14% · >30 ~18% · >15 ~25% · >5 ~25% · else ~19%
+const worstLabel = s => s > 50 ? "you alright son" : s > 30 ? "malik moment"
+  : s > 15 ? "holy stinker" : s > 5 ? "uninstall" : "...";
 
 const IMPACT_INFO = `<span class="info" tabindex="0">i<span class="tip">
   The Robert score, 0–100: how much this stat line looks like a winning
   player's, compared against every game we've recorded in the same role.
-  50 is a typical game, 74 beats 74% of them; winners usually land high,
-  but a hard-carried loss can still crack 90. ★ marks our MVP, ▼ our worst
-  seat (named by how bad it got). The FAQ tab explains the whole thing step
-  by step.</span></span>`;
+  Each stat is judged on its own merit and can only count in its natural
+  direction — deaths can never help a line. 50 is a typical game, 74 beats
+  74% of them; winners usually land high, but a hard-carried loss can still
+  crack 90. ★ marks our MVP, ▼ our worst seat (named by how bad it got).
+  The FAQ tab explains the whole thing step by step.</span></span>`;
 
 function mhScoreboard(g) {
   const maxDmg = Math.max(1, ...g.us.concat(g.them).map(r => r.dmg || 0));
@@ -3793,29 +3818,32 @@ function renderFaqPane() {
         ro.n += 1; ro.s += gi.scores.get(r);
       });
     }
-    const [sc, fbf] = CASE.map(rid => cs[rid]);
-    if (sc && fbf && sc.n > 20 && fbf.n > 20) {
+    const both = CASE.map(rid => ({ name: rid.split("#")[0], a: cs[rid] }));
+    if (both.every(p => p.a && p.a.n > 20)) {
       const avg = a => (a.s / a.n).toFixed(1), fin = a => (a.fin / a.n).toFixed(2),
         wr = a => pct(a.w / a.n);
       const roleLine = a => Object.entries(a.roles).filter(([r]) => ROLE_LABEL[r])
         .sort((x, y) => y[1].n - x[1].n)
         .map(([r, v]) => `${ROLE_LABEL[r]} <b>${(v.s / v.n).toFixed(1)}</b> (${v.n}g)`).join(" · ");
-      caseBox = qa("Why does SecondComing out-rate fallenbanditfan when fallenbanditfan's stats look better?", `
-        <p>Because "looks better" usually means raw damage, and the score deliberately doesn't rate
-        that — it rates <b>how good the line was for the seat it was played in</b>. Across our flex
-        five-stacks SecondComing averages <b>${avg(sc)}</b> (typical finish ${fin(sc)} of 10 over
-        ${sc.n} games) against fallenbanditfan's <b>${avg(fbf)}</b> (finish ${fin(fbf)} of 10 over
-        ${fbf.n}), and the rating just accumulates those finishes.</p>
-        <p>The per-role averages show where the gap comes from —</p>
-        <p>fallenbanditfan: ${roleLine(fbf)}<br>SecondComing: ${roleLine(sc)}</p>
-        <p>fallenbanditfan's mid and bot games really are excellent — but a big share of his games
-        come in the jungle and support seats, where his lines rank below average <i>for those
-        seats</i>, and that mix pulls the career number down. SecondComing plays most of his games
-        in his best seats, and a tanky top line that looks unimpressive as raw damage can still be
-        a great <i>top</i> line.</p>
-        <p>Honest footnote: fallenbanditfan's five-stack win rate is actually higher
-        (${wr(fbf)} vs ${wr(sc)}) — but the rating ignores W/L by design, and the seven features
-        can't see vision, CC or peel, so a utility-heavy style is probably a little undervalued.</p>`);
+      // the box orders itself by the live numbers, so it can never argue the
+      // wrong way around as the data moves
+      const [hi, lo] = [...both].sort((x, y) => y.a.s / y.a.n - x.a.s / x.a.n);
+      caseBox = qa(`Why does ${hi.name} out-rate ${lo.name}?`, `
+        <p>Across our flex five-stacks ${hi.name} averages <b>${avg(hi.a)}</b> (typical finish
+        ${fin(hi.a)} of 10 over ${hi.a.n} games) against ${lo.name}'s <b>${avg(lo.a)}</b> (finish
+        ${fin(lo.a)} of 10 over ${lo.a.n}), and the rating just accumulates those finishes,
+        game after game.</p>
+        <p>Remember what the score rates: each stat judged on its own merit, against the same seat.
+        The stats that carry real weight are KDA-for-the-role, damage/min and CS/min — so a line
+        with few deaths and a strong kill-and-assist count ranks high whether or not it looked
+        flashy, and a high-death line ranks low even when the team won. The per-role averages
+        show how that plays out —</p>
+        <p>${hi.name}: ${roleLine(hi.a)}<br>${lo.name}: ${roleLine(lo.a)}</p>
+        <p>Honest footnotes: their five-stack win rates are close (${wr(both[0].a)} for
+        ${both[0].name} vs ${wr(both[1].a)} for ${both[1].name}) and the rating ignores W/L by
+        design — it measures individual lines, not team results. And the seven stats still can't
+        see vision, CC or peel, so a utility-heavy game is scored only on what the scoreboard
+        records.</p>`);
     }
   }
   $("#ranked").innerHTML = `<div class="faq">
@@ -3842,10 +3870,19 @@ function renderFaqPane() {
       <p>Shares instead of raw kills on purpose: they describe <i>your part in the team</i>, not how
       stomp-y the game happened to be.</p>
       <p><b>Step 2 — the model.</b> Label every line <b>1</b> if that player's team won and <b>0</b> if it
-      lost, then fit a <b>logistic regression</b>: the computer searches for a weight on each of the
-      seven numbers so that "multiply, add up, squash to a 0–1 probability" matches the labels as
-      well as possible. Think line-of-best-fit, but for yes/no outcomes instead of a number — there
-      is nothing deeper going on than "find the weights that best fit history".</p>
+      lost. Then, for <b>each of the seven numbers separately</b>, fit a tiny model of how that number
+      alone predicts winning (a one-variable logistic regression — think line-of-best-fit, but for
+      yes/no outcomes). Each stat is pinned to its natural direction: deaths can only ever count
+      against a line, kills can only count for it, and a stat that turns out not to separate winners
+      from losers on its own simply gets almost no say — in practice KDA, damage/min and CS/min
+      carry most of the weight. Your line's seven verdicts are added up and squashed into one win
+      probability.</p>
+      <p>Why not one combined model over all seven numbers at once? It predicts the winner better,
+      but it hands out <i>credit</i> through statistical side-channels — on our data it literally
+      learned "a bigger share of your team's deaths is a good sign" (because it correlates with
+      winning once KDA is accounted for) and once scored a 3/11 line above a 24/6 line in the same
+      game. Judging each stat on its own merit gives up a little prediction accuracy to keep every
+      point of the score explainable.</p>
       <p><b>Step 3 — the score.</b> One model is fit per role, on that role's lines only. Your seven
       numbers go into your role's model and out comes a probability — but probabilities bunch up,
       so the score you see is that probability's <b>percentile</b>: the fraction of all recorded lines
@@ -3860,8 +3897,8 @@ function renderFaqPane() {
 
     ${qa("Why do winners almost always outscore losers?", `
       <p>Because good stats and winning mostly happen together — the team that's ahead gets the
-      kills, the gold, and fewer deaths. In our data the winning side averages about <b>73</b> and the
-      losing side about <b>27</b>. That's not the model cheating; that's League.</p>
+      kills, the gold, and fewer deaths. In our data the winning side averages about <b>66</b> and the
+      losing side about <b>34</b>. That's not the model cheating; that's League.</p>
       <p>The interesting information is in the exceptions: a <b>90 in a loss</b> (you did your job, the
       team lost anyway) or a <b>30 in a win</b> (you got carried, and the score knows).</p>`)}
 
@@ -3903,12 +3940,13 @@ function renderFaqPane() {
       <b>▼</b> the lowest. The worst seat's label is tiered by the raw score, with the cuts placed
       where our data actually falls:</p>
       <ul>
-        <li>above 60 — <b>"you alright son"</b> (~30% of games: a clean win keeps everyone decent)</li>
-        <li>above 40 — <b>"malik moment"</b></li>
-        <li>above 20 — <b>"holy stinker"</b></li>
-        <li>above 7 — <b>"uninstall"</b></li>
-        <li>7 or below — <b>"..."</b> (~17% of games; condolences)</li>
-      </ul>`)}
+        <li>above 50 — <b>"you alright son"</b> (~14% of games — the whole team showed up)</li>
+        <li>above 30 — <b>"malik moment"</b></li>
+        <li>above 15 — <b>"holy stinker"</b></li>
+        <li>above 5 — <b>"uninstall"</b></li>
+        <li>5 or below — <b>"..."</b> (~19% of games; condolences)</li>
+      </ul>
+      <p>The worst seat's median is 19 — win or lose, someone usually did have a rough one.</p>`)}
 
     ${qa("What data feeds all of this?", `
       <p>The squad's Riot match history from the last 12 months — only games where one whole team
