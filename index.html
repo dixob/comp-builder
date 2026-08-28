@@ -437,6 +437,7 @@
   .prow .plabel { flex: none; width: 74px; font-size: 12px; line-height: 16px; color: var(--text-secondary); font-weight: 500; }
   .prow .pmeter { flex: 1; position: relative; height: 4px; background: var(--layer-2); border-radius: 2px; overflow: hidden; }
   .prow .pmeter > div { height: 100%; border-radius: 2px; background: var(--accent); transition: width 240ms var(--ease-entrance); }
+  .prow .pdpm { flex: none; width: 58px; text-align: right; font-size: 11px; line-height: 16px; color: var(--text-secondary); }
   .pstatus {
     flex: none; font-size: 11px; line-height: 16px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
     border-radius: 999px; padding: 3px 10px; min-width: 58px; text-align: center;
@@ -874,8 +875,33 @@
      the right edge (the phone breakpoint's fixed overlay takes over below) */
   @media (min-width: 601px) {
     .pf-sec .info .tip { top: 22px; bottom: auto; left: auto; right: -8px; transform: none; }
+    /* the profile head sits at the top of the card — open its tips downward
+       too, or they poke out above the page */
+    .pf-rankline .info .tip { top: 22px; bottom: auto; }
   }
   code { background: var(--layer-2); padding: 2px 7px; border-radius: 6px; font-size: 12px; color: var(--accent); }
+  /* ---- FAQ ---- */
+  .faq { max-width: 760px; }
+  .faq .hint { margin-bottom: 14px; }
+  .faq details { border: 1px solid var(--outline); border-radius: 10px; margin-bottom: 10px; }
+  .faq summary { cursor: pointer; padding: 13px 16px; font-weight: 600; font-size: 14px; list-style: none; }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::before { content: "▸"; margin-right: 9px; color: var(--text-muted); display: inline-block; transition: transform 160ms var(--ease-entrance); }
+  .faq details[open] summary::before { transform: rotate(90deg); }
+  .faq .faq-a { padding: 2px 16px 15px; font-size: 13px; line-height: 1.65; color: var(--text-secondary); }
+  .faq .faq-a p { margin: 0 0 10px; }
+  .faq .faq-a p:last-child { margin-bottom: 0; }
+  .faq .faq-a ul { margin: 0 0 10px 20px; padding: 0; }
+  .faq .faq-a li { margin-bottom: 4px; }
+  .faq .faq-a b { color: var(--text-primary); }
+  /* ---- leaderboard ---- */
+  .lb-rank { font-weight: 700; color: var(--text-muted); }
+  .lb-rank.g { color: #e8b923; }
+  .lb-rank.s { color: #a8b2bd; }
+  .lb-rank.b { color: #c07a3d; }
+  .lb-player { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-primary); }
+  .lb-player img { width: 24px; height: 24px; border-radius: 50%; }
+  #ranked tr[data-lb] { cursor: pointer; }
   /* ---- touch (iPad/phone, any orientation) ---- */
   @media (pointer: coarse) {
     /* <16px text inputs trigger iPadOS/iOS Safari's zoom-on-focus */
@@ -1772,13 +1798,16 @@ const gamesControl = sfx => `<div class="mfloor">
 // panes (profiles, match history). The panes used to live as extra result
 // tabs inside the comps card; as page-level features they get the full
 // width, survive role locks, and stop crowding the comps tab strip.
-const PAGE_TITLE = { profiles: "Player profiles", history: "Match history" };
+const PAGE_TITLE = { profiles: "Player profiles", history: "Match history",
+  board: "Leaderboard", faq: "FAQ" };
 let page = "builder";
 
 const pageNav = () => `<nav class="tabs page-tabs">
     <button data-page="builder" class="${page === "builder" ? "active" : ""}">Builder</button>
     <button data-page="profiles" class="${page === "profiles" ? "active" : ""}" title="Pseudo op.gg: per-player profiles — ranks, roles, champion stats, duos, recent games">Profiles</button>
     <button data-page="history" class="${page === "history" ? "active" : ""}" title="Every game where one whole team was our five registered accounts — the group's shared match history, with full scoreboards">Match history</button>
+    <button data-page="board" class="${page === "board" ? "active" : ""}" title="The squad ranked by any metric — Robert rating, average score, win rate, KDA, damage, and more">Leaderboard</button>
+    <button data-page="faq" class="${page === "faq" ? "active" : ""}" title="How the Robert score, the Robert rating, and the rest of the numbers actually work — explained from scratch">FAQ</button>
   </nav>`;
 
 function wirePageNav() {
@@ -1805,7 +1834,10 @@ function render() {
         <div id="ranked"></div>
       </div>`;
     wirePageNav();
-    if (page === "profiles") renderProfilePane(); else renderHistoryPane();
+    if (page === "profiles") renderProfilePane();
+    else if (page === "board") renderBoardPane();
+    else if (page === "faq") renderFaqPane();
+    else renderHistoryPane();
     return;
   }
   $("#app").innerHTML = `${pageNav()}
@@ -3098,10 +3130,22 @@ function renderProfilePane() {
         <span>${rec.wins}W ${rec.games - rec.wins}L</span></div>`;
     }).join("");
 
+  // per-role damage/min, summed from the champ records' role splits. Role
+  // records merged live before the fields existed lack them, so rdsecs counts
+  // only the seconds the sums cover (kg's honesty rule) — no data, no number.
+  const roleDmg = {};
+  for (const e of p.champions)
+    for (const [r, s] of Object.entries(e.roles || {})) {
+      const a = roleDmg[r] ??= { dmg: 0, dsecs: 0 };
+      a.dmg += s.dmg || 0;
+      a.dsecs += s.dsecs || 0;
+    }
   const roleRows = ROLES.map(r => {
     const share = playerRoleShare(p.riotId, r);
+    const rd = roleDmg[r];
     return `<div class="prow"><span class="plabel">${ROLE_LABEL[r]}</span>
       <span class="pmeter"><div style="width:${share * 100}%"></div></span>
+      ${rd && rd.dsecs ? `<span class="pdpm" title="damage to champions per minute as ${ROLE_LABEL[r]}">${Math.round(rd.dmg / (rd.dsecs / 60))} dpm</span>` : `<span class="pdpm"></span>`}
       <span class="pstatus">${Math.round(share * 100)}%</span></div>`;
   }).join("");
 
@@ -3200,10 +3244,29 @@ function renderProfilePane() {
   for (const g of D.stacks || []) {
     if (g.secs < REMAKE_SECS) continue;
     const t = impTotals(g.us);
-    for (const r of g.us) if (r.rid === p.riotId) imps.push(impactScore(r, t));
+    for (const r of g.us) if (r.rid === p.riotId) {
+      const s = impactScore(r, t, g.secs);
+      if (s != null) imps.push(s);
+    }
   }
   const impLine = imps.length
-    ? `<div class="pf-rankline" title="Average Robert score over ${imps.length} five-stack game${imps.length === 1 ? "" : "s"}${flexOnly ? " (flex only)" : ""} — see the match-history scoreboards for how it's built">Avg Robert score: <b>${(imps.reduce((a, b) => a + b, 0) / imps.length).toFixed(1)}</b></div>`
+    ? `<div class="pf-rankline">Avg Robert score: <b>${(imps.reduce((a, b) => a + b, 0) / imps.length).toFixed(1)}</b><span class="info" tabindex="0">i<span class="tip">
+        The per-game Robert score — 0–100, "how much did this stat line look
+        like a winner's for the role", 50 = typical — averaged over the
+        player's ${imps.length} five-stack game${imps.length === 1 ? "" : "s"}${flexOnly ? " (flex only)" : ""}. Consistently above 50 means the
+        games keep running through this player. The FAQ tab explains the
+        score from scratch.</span></span></div>`
+    : "";
+  // persistent skill rating from ranking all ten seats of every five-stack
+  const rt = robertRatings().by[p.riotId];
+  const ratingLine = rt
+    ? `<div class="pf-rankline">Robert rating: <b>${(rt.mu - 3 * rt.sigma).toFixed(1)}</b> <span class="dim">(μ ${rt.mu.toFixed(1)} · σ ${rt.sigma.toFixed(2)})</span><span class="info" tabindex="0">i<span class="tip">
+        A career rating built on Robert scores, not wins: each of the
+        player's ${rt.games} five-stack game${rt.games === 1 ? "" : "s"}${flexOnly ? " (flex only)" : ""} ranks all ten seats by score,
+        and the rating moves by how that finish compared to expectation — a
+        carried loss still climbs. Shown as μ−3σ, a cautious floor that
+        rewards proven consistency over hot streaks. μ, σ, and the math are
+        unpacked in the FAQ tab.</span></span></div>`
     : "";
 
   $("#ranked").innerHTML = `
@@ -3213,7 +3276,7 @@ function renderProfilePane() {
       <div>
         <div class="pf-name">${name} <span class="tag">#${tag || ""}</span></div>
         <div class="pf-rankline">${rankLine(p)}</div>
-        ${dpmLine}${impLine}
+        ${dpmLine}${impLine}${ratingLine}
       </div>
       <div class="pf-queues">${queues || `<span class="hint">no ranked games</span>`}</div>
     </div>
@@ -3267,69 +3330,119 @@ const MH_LANE = { TOP: 0, JUNGLE: 1, MIDDLE: 2, BOTTOM: 3, UTILITY: 4 };
 const byLane = rows => [...rows].sort((a, b) => (MH_LANE[a.role] ?? 9) - (MH_LANE[b.role] ?? 9));
 
 // --- impact score (shown as "Robert score") --------------------------------
-// One number for "how much did the game run through this player", built only
-// from what a scoreboard row records. Four within-team shares, each judged
-// against the average for the player's ROLE across every recorded five-stack
-// (both teams — 10 rows per game), so a support isn't punished for posting a
-// support's damage share:
-//   kill participation 35% · damage share 25% · gold share 15% · deaths 25%
-// Each component enters as a log2 ratio vs its role baseline (double the
-// baseline = +1, half = −1, deaths inverted), clamped to ±1.5, weighted, and
-// scaled to roughly ±100. MVP / worst are picked among OUR five; remakes and
-// off-role UNKNOWNs fall back to the all-roles baseline.
-const IMPACT_W = { kp: 0.35, dmg: 0.25, gold: 0.15, death: 0.25 };
+// PandaSkill's recipe (arXiv:2501.10049) scaled down to a scoreboard row.
+// A per-role logistic model, fit on every recorded five-stack (both teams —
+// 10 rows per game), learns which end-game lines win games; a player's score
+// is the percentile of their line's predicted win chance among all recorded
+// lines for their ROLE, 0..100 — 74 means the line beats 74% of recorded
+// games in the role. Features are contribution-shaped on purpose — kill
+// participation, death/damage/gold shares within the team, KDA, damage/min,
+// CS/min — NOT raw kills or gold/min, which merely re-detect the outcome
+// (AUC 0.99) and collapse the score to "did you win". Winners still sit high
+// (they earned the stats), but a carried loss can crack 90. MVP / worst are
+// picked among OUR five; remakes are skipped and off-role UNKNOWNs use the
+// all-roles fit.
 const impTotals = rows => rows.reduce((t, r) => ({ k: t.k + r.k, d: t.d + r.d,
   dmg: t.dmg + (r.dmg || 0), gold: t.gold + (r.gold || 0) }), { k: 0, d: 0, dmg: 0, gold: 0 });
-const impComps = (r, t) => ({
-  kp: (r.k + r.a) / Math.max(1, t.k),
-  death: r.d / Math.max(1, t.d),
-  dmg: (r.dmg || 0) / Math.max(1, t.dmg),
-  gold: (r.gold || 0) / Math.max(1, t.gold),
-});
-let impBase = null;  // cached per feed — applyData swaps D, dropping the cache
-function impactBaselines() {
-  if (impBase && impBase.src === D.stacks) return impBase;
-  const acc = {};
+const impComps = (r, t, secs) => {
+  const mins = Math.max(1, secs / 60);
+  return [
+    (r.k + r.a) / Math.max(1, t.k),     // kill participation
+    r.d / Math.max(1, t.d),             // death share
+    (r.dmg || 0) / Math.max(1, t.dmg),  // damage share
+    (r.gold || 0) / Math.max(1, t.gold),// gold share
+    (r.k + r.a) / Math.max(1, r.d),     // KDA
+    (r.dmg || 0) / mins,                // damage/min
+    r.cs / mins,                        // CS/min
+  ];
+};
+const IMP_MIN_ROWS = 100;  // below this the fit is noise — no scores at all
+const IMP_ROLE_MIN = 40;   // thinner roles fall back to the all-roles fit
+
+// standardized logistic regression by batch gradient descent — deterministic;
+// 800 iterations is converged for these sizes (checked against 2000)
+function logitFit(X, y) {
+  const n = X.length, m = X[0].length;
+  const mean = new Array(m).fill(0), sd = new Array(m).fill(0);
+  for (const x of X) for (let j = 0; j < m; j++) mean[j] += x[j] / n;
+  for (const x of X) for (let j = 0; j < m; j++) sd[j] += (x[j] - mean[j]) ** 2 / n;
+  for (let j = 0; j < m; j++) sd[j] = Math.sqrt(sd[j]) || 1;
+  const Z = X.map(x => x.map((v, j) => (v - mean[j]) / sd[j]));
+  const w = new Array(m + 1).fill(0);
+  for (let t = 0; t < 800; t++) {
+    const g = new Array(m + 1).fill(0);
+    for (let i = 0; i < n; i++) {
+      let z = w[m];
+      for (let j = 0; j < m; j++) z += w[j] * Z[i][j];
+      const e = 1 / (1 + Math.exp(-z)) - y[i];
+      for (let j = 0; j < m; j++) g[j] += e * Z[i][j];
+      g[m] += e;
+    }
+    for (let j = 0; j <= m; j++) w[j] -= g[j] / n;
+  }
+  return { predict: x => {
+    let z = w[m];
+    for (let j = 0; j < m; j++) z += w[j] * (x[j] - mean[j]) / sd[j];
+    return 1 / (1 + Math.exp(-z));
+  } };
+}
+
+let impModel = null;  // cached per feed — applyData swaps D, dropping the cache
+function robertModels() {
+  if (impModel && impModel.src === D.stacks) return impModel;
+  const byRole = { _all: [] };
   for (const g of D.stacks || []) {
     if (g.secs < REMAKE_SECS) continue;
-    for (const rows of [g.us, g.them]) {
-      const t = impTotals(rows);
-      for (const r of rows) {
-        const c = impComps(r, t);
-        for (const key of [r.role, "_all"]) {
-          const a = acc[key] ??= { n: 0, kp: 0, death: 0, dmg: 0, gold: 0 };
-          a.n += 1;
-          for (const k in IMPACT_W) a[k] += c[k];
-        }
+    for (const [team, win] of [[g.us, g.win], [g.them, 1 - g.win]]) {
+      const t = impTotals(team);
+      for (const r of team) {
+        const row = { x: impComps(r, t, g.secs), win };
+        byRole._all.push(row);
+        if (r.role !== "UNKNOWN") (byRole[r.role] ??= []).push(row);
       }
     }
   }
-  impBase = { src: D.stacks };
-  for (const [role, a] of Object.entries(acc))
-    impBase[role] = { kp: a.kp / a.n, death: a.death / a.n, dmg: a.dmg / a.n, gold: a.gold / a.n };
-  return impBase;
+  impModel = { src: D.stacks, fits: null };
+  if (byRole._all.length >= IMP_MIN_ROWS) {
+    impModel.fits = {};
+    for (const [role, rows] of Object.entries(byRole)) {
+      if (role !== "_all" && rows.length < IMP_ROLE_MIN) continue;
+      const fit = logitFit(rows.map(r => r.x), rows.map(r => r.win));
+      // percentile lookup table: every recorded line's predicted win chance
+      fit.sorted = rows.map(r => fit.predict(r.x)).sort((a, b) => a - b);
+      impModel.fits[role] = fit;
+    }
+  }
+  return impModel;
 }
-function impactScore(r, t) {
-  const base = impactBaselines();
-  const b = base[r.role] || base._all;
-  if (!b) return 0;
-  // +0.02 keeps a 0-kill team or a deathless game finite without drowning
-  // the signal (shares live around 0.2)
-  const lg = (x, y) => Math.max(-1.5, Math.min(1.5, Math.log2((x + 0.02) / (y + 0.02))));
-  const c = impComps(r, t);
-  let s = 0;
-  for (const k in IMPACT_W) s += IMPACT_W[k] * (k === "death" ? lg(b[k], c[k]) : lg(c[k], b[k]));
-  return Math.round(s * 66.7);
+
+function impactScore(r, t, secs) {
+  const { fits } = robertModels();
+  if (!fits) return null;
+  const fit = fits[r.role] || fits._all;
+  const p = fit.predict(impComps(r, t, secs));
+  // midrank percentile among every recorded line for the role
+  const arr = fit.sorted;
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; arr[m] < p ? lo = m + 1 : hi = m; }
+  let lo2 = lo, hi2 = arr.length;
+  while (lo2 < hi2) { const m = (lo2 + hi2) >> 1; arr[m] <= p ? lo2 = m + 1 : hi2 = m; }
+  return Math.round(100 * ((lo + lo2) / 2) / arr.length);
 }
+
 function gameImpact(g) {
   const scores = new Map();
   for (const rows of [g.us, g.them]) {
     const t = impTotals(rows);
-    for (const r of rows) scores.set(r, impactScore(r, t));
+    for (const r of rows) {
+      const s = impactScore(r, t, g.secs);
+      if (s != null) scores.set(r, s);
+    }
   }
   let mvp = null, worst = null;
-  if (g.secs >= REMAKE_SECS)
+  if (g.secs >= REMAKE_SECS && scores.size)
     for (const r of g.us) {
+      if (!scores.has(r)) continue;
       if (!mvp || scores.get(r) > scores.get(mvp)) mvp = r;
       if (!worst || scores.get(r) < scores.get(worst)) worst = r;
     }
@@ -3337,22 +3450,96 @@ function gameImpact(g) {
   return { scores, mvp, worst };
 }
 
-// Tiered name for our worst seat, cut where the data actually falls (worst-
-// performer spread over 384 stacks: median −27, p10 −49, a positive score —
-// worst on a team where everyone popped off — happens ~1% of games):
-//   >0 ~1% · >−20 ~31% · >−40 ~47% · >−60 ~18% · else ~3%
-const worstLabel = s => s > 0 ? "you alright son" : s > -20 ? "malik moment"
-  : s > -40 ? "holy stinker" : s > -60 ? "uninstall" : "...";
+// --- Robert rating (OpenSkill over Robert scores) ---------------------------
+// PandaSkill step two: after each five-stack, all ten seats are ranked by
+// Robert score and every rating — a Gaussian (μ, σ) — moves on that finish
+// alone via OpenSkill's Plackett-Luce free-for-all update (faithful port of
+// openskill.js defaults). Performance moves the rating, not the W/L, so a
+// carried loss still climbs. Our five persist chronologically; opponents are
+// strangers and enter each game at the default rating. Reported as μ − 3σ,
+// a conservative floor that rewards consistency and punishes thin samples.
+const OS_MU = 25, OS_SIG = 25 / 3, OS_BETASQ = (OS_SIG / 2) ** 2, OS_EPS = 1e-4;
+function plackettLuce(seats) {
+  // seats: [{mu, sigma, score}] → updated [{mu, sigma}], same order.
+  // Update runs in rank order (ties share a rank) so the prefix sums below
+  // index correctly — this mirrors openskill.js, which sorts before rating.
+  const order = seats.map((_, i) => i).sort((a, b) => seats[b].score - seats[a].score);
+  const ranks = [];
+  let s = 0;
+  order.forEach((si, j) => {
+    if (j > 0 && seats[order[j - 1]].score > seats[order[j]].score) s = j;
+    ranks[j] = s;
+  });
+  const tr = order.map((si, j) => [seats[si].mu, seats[si].sigma ** 2, si, ranks[j]]);
+  const c = Math.sqrt(tr.reduce((t, [, sq]) => t + sq + OS_BETASQ, 0));
+  const sumQ = tr.map(([, , , qR]) =>
+    tr.reduce((t, [iMu, , , iR]) => iR >= qR ? t + Math.exp(iMu / c) : t, 0));
+  const nEq = tr.map(([, , , iR]) => tr.filter(([, , , qR]) => iR === qR).length);
+  const out = new Array(seats.length);
+  tr.forEach(([mu, sigmaSq, si, rank], i) => {
+    const expMu = Math.exp(mu / c);
+    let omega = 0, delta = 0;
+    tr.forEach(([, , , qRank], q) => {
+      if (qRank > rank) return;
+      const quot = expMu / sumQ[q];
+      omega += (i === q ? 1 - quot : -quot) / nEq[q];
+      delta += quot * (1 - quot) / nEq[q];
+    });
+    out[si] = {
+      mu: mu + (sigmaSq / c) * omega,
+      sigma: Math.sqrt(sigmaSq * Math.max(1 - (Math.sqrt(sigmaSq) / c) * (sigmaSq / (c * c)) * delta, OS_EPS)),
+    };
+  });
+  return out;
+}
+
+let impRatings = null;  // cached per feed and per role filter, like the models
+function robertRatings(roles) {
+  // With a role filter (a Set of roles), a tracked player's persistent rating
+  // only engages for games where they played an in-filter role; every other
+  // seat still shapes the finish but joins at the default rating, like the
+  // opponents do. No filter = the plain career rating.
+  const key = roles && roles.size ? [...roles].sort().join("|") : "";
+  if (!impRatings || impRatings.src !== D.stacks) impRatings = { src: D.stacks, byKey: {} };
+  if (impRatings.byKey[key]) return { by: impRatings.byKey[key] };
+  const by = impRatings.byKey[key] = {};
+  for (const g of [...(D.stacks || [])].sort((a, b) => a.ts - b.ts)) {
+    if (g.secs < REMAKE_SECS) continue;
+    const { scores } = gameImpact(g);
+    if (!scores.size) break;  // dataset too thin for the score models
+    const seats = [...g.us, ...g.them].filter(r => scores.has(r)).map(r => {
+      const tracked = r.rid && (!key || roles.has(r.role));
+      return {
+        rid: tracked ? r.rid : null,
+        mu: (tracked && by[r.rid]) ? by[r.rid].mu : OS_MU,
+        sigma: (tracked && by[r.rid]) ? by[r.rid].sigma : OS_SIG,
+        score: scores.get(r),
+      };
+    });
+    const up = plackettLuce(seats);
+    seats.forEach((seat, i) => {
+      if (!seat.rid) return;
+      by[seat.rid] = { mu: up[i].mu, sigma: up[i].sigma,
+        games: (by[seat.rid] ? by[seat.rid].games : 0) + 1 };
+    });
+  }
+  return { by };
+}
+
+// Tiered name for our worst seat, cut where the data actually falls on the
+// 0-100 percentile scale (worst-performer spread over 384 stacks: median 42,
+// p25 12, p90 78 — a won game usually keeps even the worst seat above 60):
+//   >60 ~30% · >40 ~21% · >20 ~15% · >7 ~16% · else ~17%
+const worstLabel = s => s > 60 ? "you alright son" : s > 40 ? "malik moment"
+  : s > 20 ? "holy stinker" : s > 7 ? "uninstall" : "...";
 
 const IMPACT_INFO = `<span class="info" tabindex="0">i<span class="tip">
-  The Robert score: how much the game ran through this player. Kill
-  participation (35%), share of the team's damage (25%) and gold (15%), with
-  death share counting against (25%) — each judged against the average for
-  that role across every recorded five-stack, so supports are measured as
-  supports. Roughly −100 (invisible) to +100 (carried). ★ marks our MVP;
-  ▼ our worst seat, named by how bad it got: "you alright son" (still
-  positive) → malik moment → holy stinker → uninstall → "..." (below
-  −60).</span></span>`;
+  The Robert score, 0–100: how much this stat line looks like a winning
+  player's, compared against every game we've recorded in the same role.
+  50 is a typical game, 74 beats 74% of them; winners usually land high,
+  but a hard-carried loss can still crack 90. ★ marks our MVP, ▼ our worst
+  seat (named by how bad it got). The FAQ tab explains the whole thing step
+  by step.</span></span>`;
 
 function mhScoreboard(g) {
   const maxDmg = Math.max(1, ...g.us.concat(g.them).map(r => r.dmg || 0));
@@ -3366,7 +3553,7 @@ function mhScoreboard(g) {
     <td><div class="wr-cell"><span>${((r.dmg || 0) / 1000).toFixed(1)}k <span class="dim">(${Math.round((r.dmg || 0) / mins)})</span></span><div class="wr-bar"><div style="width:${(r.dmg || 0) / maxDmg * 100}%"></div></div></div></td>
     <td>${((r.gold || 0) / 1000).toFixed(1)}k</td>
     <td>${r.cs} <span class="dim">(${(r.cs / mins).toFixed(1)})</span></td>
-    <td>${scores.get(r)}${r === mvp ? `<span class="imp-chip mvp">★ MVP</span>`
+    <td>${scores.has(r) ? scores.get(r) : `<span class="dim">—</span>`}${r === mvp ? `<span class="imp-chip mvp">★ MVP</span>`
       : r === worst ? `<span class="imp-chip worst">▼ ${worstLabel(scores.get(r))}</span>` : ""}</td>
   </tr>`;
   const head = (label, won, tip = "") => `<tr><th class="mh-side ${won ? "win" : "loss"}">${label} — ${won ? "Victory" : "Defeat"}</th>
@@ -3422,6 +3609,301 @@ function renderHistoryPane() {
   }));
   const moreBtn = $("#mhMore");
   if (moreBtn) moreBtn.addEventListener("click", () => { mhShow += MH_SHOW_STEP; renderHistoryPane(); });
+}
+
+// --- leaderboard -----------------------------------------------------------
+// The squad ranked by any metric. Rate-style columns (WR, KDA, DPM, CS/m)
+// aggregate every tracked game; the Robert columns (KP, avg score, MVP/worst
+// counts, rating) only exist where we hold both scoreboards, i.e. the
+// five-stack feed. Click a header to re-rank; medals follow the sort.
+let lbSort = { key: "rating", dir: 1 };  // dir 1 = best first (A→Z for names)
+let lbRoles = new Set();  // role filter — empty means every role counts
+
+function renderBoardPane() {
+  const roleSel = lbRoles.size ? lbRoles : null;
+  // per-player aggregates over all tracked games — from the champ records'
+  // role splits when a filter is on, whole champ records otherwise
+  const players = D.players.map(p => {
+    const t = { games: 0, wins: 0, k: 0, d: 0, as: 0, kg: 0, cs: 0, secs: 0, dmg: 0, dsecs: 0 };
+    for (const c of p.champions) {
+      const parts = roleSel
+        ? Object.entries(c.roles || {}).filter(([role]) => roleSel.has(role)).map(([, s]) => s)
+        : [c];
+      for (const s of parts) {
+        t.games += s.games; t.wins += s.wins;
+        t.k += s.k || 0; t.d += s.d || 0; t.as += s.a || 0; t.kg += s.kg || 0;
+        t.cs += s.cs || 0; t.secs += s.secs || 0;
+        t.dmg += s.dmg || 0; t.dsecs += s.dsecs || 0;
+      }
+    }
+    return { rid: p.riotId, t };
+  });
+  // five-stack aggregates in one pass (score models are cached per feed) —
+  // under a filter only the player's in-filter games count, MVP/worst included
+  const agg = {};
+  for (const g of D.stacks || []) {
+    if (g.secs < REMAKE_SECS) continue;
+    const gi = gameImpact(g);
+    const tot = impTotals(g.us);
+    for (const r of g.us) {
+      if (roleSel && !roleSel.has(r.role)) continue;
+      const a = agg[r.rid] ??= { imps: [], mvp: 0, worst: 0, kpS: 0, kpN: 0 };
+      if (gi.scores.has(r)) a.imps.push(gi.scores.get(r));
+      if (r === gi.mvp) a.mvp += 1;
+      if (r === gi.worst) a.worst += 1;
+      a.kpS += (r.k + r.a) / Math.max(1, tot.k);
+      a.kpN += 1;
+    }
+  }
+  const ratings = robertRatings(roleSel).by;
+
+  const val = {
+    player: r => r.rid.split("#")[0].toLowerCase(),
+    games: r => r.t.games,
+    wr: r => r.t.games ? r.t.wins / r.t.games : null,
+    kda: r => r.t.kg ? (r.t.k + r.t.as) / Math.max(1, r.t.d) : null,
+    dpm: r => r.t.dsecs ? r.t.dmg / (r.t.dsecs / 60) : null,
+    csm: r => r.t.secs ? r.t.cs / (r.t.secs / 60) : null,
+    kp: r => { const a = agg[r.rid]; return a && a.kpN ? a.kpS / a.kpN : null; },
+    avg: r => { const a = agg[r.rid]; return a && a.imps.length
+      ? a.imps.reduce((x, y) => x + y, 0) / a.imps.length : null; },
+    mvp: r => agg[r.rid] ? agg[r.rid].mvp : null,
+    worst: r => agg[r.rid] ? agg[r.rid].worst : null,
+    rating: r => ratings[r.rid] ? ratings[r.rid].mu - 3 * ratings[r.rid].sigma : null,
+  };
+  const v = val[lbSort.key] || val.rating;
+  const rows = [...players].sort((a, b) => {
+    const va = v(a), vb = v(b);
+    if (va == null || vb == null) return (va == null) - (vb == null);
+    return typeof va === "string" ? va.localeCompare(vb) * lbSort.dir : (vb - va) * lbSort.dir;
+  });
+
+  const COLS = [
+    ["player", "Player", "Click a row for the full profile"],
+    ["games", "Games", "Tracked games in the 12-month window (solo + flex + clash)"],
+    ["wr", "Win rate", "Across every tracked game"],
+    ["kda", "KDA", "(kills + assists) / deaths, summed over every tracked game"],
+    ["dpm", "DPM", "Damage to champions per minute, every tracked game"],
+    ["csm", "CS/m", "Creep score per minute, every tracked game"],
+    ["kp", "KP", "Average kill participation — five-stack games only"],
+    ["avg", "Avg Robert", "Average Robert score (0–100, 50 = typical) over five-stack games — see the FAQ"],
+    ["mvp", "★ MVP", "Games as our five's top Robert score"],
+    ["worst", "▼ Worst", "Games as our five's lowest Robert score"],
+    ["rating", "Robert rating", "μ−3σ skill rating from ranking all ten seats of every five-stack — see the FAQ"],
+  ];
+  const head = COLS.map(([k, label, tip]) =>
+    `<th class="sortable${lbSort.key === k ? " sorted" : ""}" data-lbsort="${k}" title="${tip}">
+      ${label}${lbSort.key === k ? (lbSort.dir === 1 ? " ▼" : " ▲") : ""}</th>`).join("");
+  const dash = `<span class="dim">—</span>`;
+  const body = rows.map((r, i) => {
+    const a = agg[r.rid], rt = ratings[r.rid];
+    const wr = val.wr(r), kda = val.kda(r);
+    return `<tr data-lb="${r.rid}" title="Open ${esc(r.rid.split("#")[0])}'s profile">
+      <td><span class="lb-rank ${i === 0 ? "g" : i === 1 ? "s" : i === 2 ? "b" : ""}">${i + 1}</span></td>
+      <td><span class="lb-player">${avatar(r.rid)}${esc(r.rid.split("#")[0])}</span></td>
+      <td>${r.t.games}g</td>
+      <td>${wr != null ? `<div class="wr-cell"><b>${pct(wr)}</b><div class="wr-bar"><div style="width:${wr * 100}%"></div></div></div>` : dash}</td>
+      <td>${kda != null ? kda.toFixed(2) : dash}</td>
+      <td>${val.dpm(r) != null ? Math.round(val.dpm(r)) : dash}</td>
+      <td>${val.csm(r) != null ? val.csm(r).toFixed(1) : dash}</td>
+      <td>${val.kp(r) != null ? pct(val.kp(r)) : dash}</td>
+      <td>${val.avg(r) != null ? val.avg(r).toFixed(1) : dash}</td>
+      <td>${a ? a.mvp : dash}</td>
+      <td>${a ? a.worst : dash}</td>
+      <td>${rt ? `<b>${(rt.mu - 3 * rt.sigma).toFixed(1)}</b> <span class="dim">· ${rt.games}g</span>` : dash}</td>
+    </tr>`;
+  }).join("");
+
+  const roleChips = `<div class="pf-switch" style="margin-bottom:8px">
+    <button type="button" class="pf-chip${lbRoles.size ? "" : " active"}" data-lbclear
+      title="No filter — every game counts">All roles</button>
+    ${ROLES.map(r => `<button type="button" class="pf-chip${lbRoles.has(r) ? " active" : ""}" data-lbrole="${r}"
+      title="Only count games played as ${ROLE_LABEL[r]} — combine several roles by selecting more than one">${ROLE_LABEL[r]}</button>`).join("")}
+  </div>`;
+
+  $("#ranked").innerHTML = `
+    ${roleChips}
+    <div class="hint" style="margin-bottom:10px">Click a column to re-rank${flexOnly ? " — flex games only" : ""}${roleSel ? `; counting only games played as ${[...lbRoles].map(r => ROLE_LABEL[r]).join(" / ")}` : ""}.
+      Win rate, KDA, DPM and CS/m cover every tracked game; KP, Robert score and rating only exist for five-stacks.
+      Filter by role to compare like for like — a support's CS/m only makes sense against other support games.</div>
+    <div class="pf-sec"><table>
+      <tr><th></th>${head}</tr>
+      ${body}
+    </table></div>`;
+  document.querySelectorAll("[data-lbsort]").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.lbsort;
+    lbSort = lbSort.key === k ? { key: k, dir: -lbSort.dir } : { key: k, dir: 1 };
+    renderBoardPane();
+  }));
+  document.querySelectorAll("[data-lbrole]").forEach(b => b.addEventListener("click", () => {
+    const r = b.dataset.lbrole;
+    lbRoles.has(r) ? lbRoles.delete(r) : lbRoles.add(r);
+    renderBoardPane();
+  }));
+  const clearBtn = document.querySelector("[data-lbclear]");
+  if (clearBtn) clearBtn.addEventListener("click", () => { lbRoles.clear(); renderBoardPane(); });
+  document.querySelectorAll("[data-lb]").forEach(tr => tr.addEventListener("click", () => {
+    profilePlayer = tr.dataset.lb;
+    setPage("profiles");
+  }));
+}
+
+// --- FAQ -------------------------------------------------------------------
+// Long-form, from-scratch explanations of the Robert score and rating — the
+// hover tips give the one-breath version and point here. Written for someone
+// who has never met a statistical model; live numbers come from the current
+// dataset so the examples never go stale.
+function renderFaqPane() {
+  const real = (D.stacks || []).filter(g => g.secs >= REMAKE_SECS);
+  const nGames = real.length, nLines = nGames * 10;
+  const qa = (q, a) => `<details><summary>${q}</summary><div class="faq-a">${a}</div></details>`;
+
+  // Live case study: the squad's favorite apparent paradox. Numbers are
+  // recomputed from the current feed so the box never goes stale; it only
+  // renders when both accounts are in the dataset (and skips gracefully in
+  // someone else's copy).
+  const CASE = ["SecondComing#him", "fallenbanditfan#luv"];
+  let caseBox = "";
+  if (CASE.every(rid => D.players.some(p => p.riotId === rid))) {
+    const cs = {};
+    for (const g of real) {
+      const gi = gameImpact(g);
+      if (!gi.scores.size) break;
+      const all = [...g.us, ...g.them].filter(r => gi.scores.has(r))
+        .sort((a, b) => gi.scores.get(b) - gi.scores.get(a));
+      all.forEach((r, idx) => {
+        if (!r.rid || !CASE.includes(r.rid)) return;
+        const a = cs[r.rid] ??= { n: 0, s: 0, fin: 0, w: 0, roles: {} };
+        a.n += 1; a.s += gi.scores.get(r); a.fin += idx + 1; a.w += g.win;
+        const ro = a.roles[r.role] ??= { n: 0, s: 0 };
+        ro.n += 1; ro.s += gi.scores.get(r);
+      });
+    }
+    const [sc, fbf] = CASE.map(rid => cs[rid]);
+    if (sc && fbf && sc.n > 20 && fbf.n > 20) {
+      const avg = a => (a.s / a.n).toFixed(1), fin = a => (a.fin / a.n).toFixed(2),
+        wr = a => pct(a.w / a.n);
+      const roleLine = a => Object.entries(a.roles).filter(([r]) => ROLE_LABEL[r])
+        .sort((x, y) => y[1].n - x[1].n)
+        .map(([r, v]) => `${ROLE_LABEL[r]} <b>${(v.s / v.n).toFixed(1)}</b> (${v.n}g)`).join(" · ");
+      caseBox = qa("Why does SecondComing out-rate fallenbanditfan when fallenbanditfan's stats look better?", `
+        <p>Because they're different pools of games, judged per role. The leaderboard's KDA, DPM and
+        win-rate columns cover <b>every tracked game, solo queue included</b> — where fallenbanditfan
+        racks up big damage numbers. The Robert score and rating only see the <b>five-stacks</b>, and
+        there the gap flips: SecondComing averages <b>${avg(sc)}</b> (typical finish ${fin(sc)} of 10
+        over ${sc.n} games) against fallenbanditfan's <b>${avg(fbf)}</b> (finish ${fin(fbf)} of 10 over
+        ${fbf.n}). The rating just accumulates those finishes.</p>
+        <p>The per-role averages show where it comes from —</p>
+        <p>fallenbanditfan: ${roleLine(fbf)}<br>SecondComing: ${roleLine(sc)}</p>
+        <p>Raw DPM flatters damage roles, and the per-role percentile deliberately removes that:
+        a tanky top line that looks unimpressive can still be a great <i>top</i> line, while big
+        damage in a jungle or support seat doesn't make it a good jungle or support line.</p>
+        <p>Honest footnote: fallenbanditfan's five-stack win rate is actually higher
+        (${wr(fbf)} vs ${wr(sc)}) — but the rating ignores W/L by design, and the seven features
+        can't see vision, CC or peel, so a utility-heavy style is probably a little undervalued.</p>`);
+    }
+  }
+  $("#ranked").innerHTML = `<div class="faq">
+    <div class="hint">Everything here is computed from the squad's own games — currently
+      <b>${nGames}</b> five-stack game${nGames === 1 ? "" : "s"} (${nLines.toLocaleString()} player stat lines)${flexOnly ? ", flex only" : ""}.
+      The method is borrowed from PandaSkill (arXiv 2501.10049), a system built to rate pro League players, scaled down to our scoreboards.</div>
+
+    ${qa("What is the Robert score?", `
+      <p>One number, <b>0 to 100</b>, for a single game: how much your end-of-game stat line
+      looks like the stat line of someone whose team won.</p>
+      <p><b>50 is a perfectly typical game.</b> A 74 means your line looked more like a winner's
+      than 74% of every game we have on record for your role. It appears in every match-history
+      scoreboard, and each profile shows the player's average.</p>`)}
+
+    ${qa("How is it calculated, exactly?", `
+      <p><b>Step 1 — the data.</b> Every recorded five-stack keeps both full scoreboards, so each
+      game contributes ten stat lines (${nLines.toLocaleString()} so far). Each line is boiled down to seven numbers:</p>
+      <ul>
+        <li><b>Kill participation</b> — the share of your team's kills you had a hand in</li>
+        <li><b>Death share</b> — your slice of the team's deaths</li>
+        <li><b>Damage share</b> and <b>gold share</b> — your slice of the team's totals</li>
+        <li><b>KDA</b>, <b>damage per minute</b>, <b>CS per minute</b></li>
+      </ul>
+      <p>Shares instead of raw kills on purpose: they describe <i>your part in the team</i>, not how
+      stomp-y the game happened to be.</p>
+      <p><b>Step 2 — the model.</b> Label every line <b>1</b> if that player's team won and <b>0</b> if it
+      lost, then fit a <b>logistic regression</b>: the computer searches for a weight on each of the
+      seven numbers so that "multiply, add up, squash to a 0–1 probability" matches the labels as
+      well as possible. Think line-of-best-fit, but for yes/no outcomes instead of a number — there
+      is nothing deeper going on than "find the weights that best fit history".</p>
+      <p><b>Step 3 — the score.</b> One model is fit per role, on that role's lines only. Your seven
+      numbers go into your role's model and out comes a probability — but probabilities bunch up,
+      so the score you see is that probability's <b>percentile</b>: the fraction of all recorded lines
+      in your role that yours beats. That construction is what makes 50 average by definition.</p>`)}
+
+    ${qa("What does “looks like a winner” mean?", `
+      <p>The model never sees who won <i>your</i> game — it only sees your seven numbers. But its
+      weights were learned from lines labeled by team win/loss. So a high score literally means:
+      <b>"in our history, lines like this one usually belonged to players whose team won."</b></p>
+      <p>It measures resemblance, not the W itself — which is exactly why a monster game in a loss
+      can still score 90+.</p>`)}
+
+    ${qa("Why do winners almost always outscore losers?", `
+      <p>Because good stats and winning mostly happen together — the team that's ahead gets the
+      kills, the gold, and fewer deaths. In our data the winning side averages about <b>73</b> and the
+      losing side about <b>27</b>. That's not the model cheating; that's League.</p>
+      <p>The interesting information is in the exceptions: a <b>90 in a loss</b> (you did your job, the
+      team lost anyway) or a <b>30 in a win</b> (you got carried, and the score knows).</p>`)}
+
+    ${qa("Why is everything judged per role?", `
+      <p>A support's damage share will never look like a mid laner's, and their death share is
+      structurally different. Each role gets its own model, fit only on that role's games, and the
+      final percentile is taken within the role too — so a support's 80 and a jungler's 80 mean the
+      same thing: top-20% for that seat.</p>`)}
+
+    ${qa("What is the Robert rating, and how is it different from the score?", `
+      <p>The score judges <b>one game</b>; the rating accumulates a <b>career</b>. It works like chess
+      Elo with two twists.</p>
+      <p><b>Twist one:</b> instead of a 1-v-1 win/loss, every five-stack is treated as a ten-player
+      free-for-all that finishes in Robert-score order — someone comes 1st, someone comes 10th.</p>
+      <p><b>Twist two:</b> the update rule is <b>OpenSkill</b> (an open-source Bayesian rating system in
+      the TrueSkill family). Finish about where your rating predicted and nothing much moves;
+      outperform the prediction and your rating jumps. The actual W or L never enters the
+      formula — only where your performance ranked.</p>`)}
+
+    ${qa("What are μ and σ, and why is the headline number μ − 3σ?", `
+      <p>The system's belief about your skill isn't a single number, it's a bell curve.
+      <b>μ (mu)</b> is its best guess; <b>σ (sigma)</b> is how unsure it still is — large when you have
+      few games, shrinking as evidence piles up.</p>
+      <p>The number shown is <b>μ − 3σ</b>, a deliberately conservative floor: "we're about 99.7% sure
+      you're <i>at least</i> this good." A player with 30 excellent games still shows a modest floor
+      because σ is big; keep posting consistent scores over many games and the floor climbs even
+      when μ barely moves. It rewards proven consistency over a hot streak.</p>`)}
+
+    ${qa("Why did my rating drop after a win (or climb after a loss)?", `
+      <p>Because it rates <b>finishes, not results</b>. Win the game while posting our five's lowest
+      score and you likely finished 7th–10th of ten — below what your rating expected, so it dips.
+      Hard-carry a loss and you finished near the top, so it climbs. If it barely moved, you landed
+      about where the system predicted.</p>`)}
+
+    ${caseBox}
+
+    ${qa("What do the ★ MVP star and the ▼ worst-seat labels mean?", `
+      <p>In each scoreboard, <b>★ MVP</b> marks the highest Robert score among <i>our</i> five and
+      <b>▼</b> the lowest. The worst seat's label is tiered by the raw score, with the cuts placed
+      where our data actually falls:</p>
+      <ul>
+        <li>above 60 — <b>"you alright son"</b> (~30% of games: a clean win keeps everyone decent)</li>
+        <li>above 40 — <b>"malik moment"</b></li>
+        <li>above 20 — <b>"holy stinker"</b></li>
+        <li>above 7 — <b>"uninstall"</b></li>
+        <li>7 or below — <b>"..."</b> (~17% of games; condolences)</li>
+      </ul>`)}
+
+    ${qa("What data feeds all of this?", `
+      <p>The squad's Riot match history from the last 12 months — only games where one whole team
+      was our five registered accounts, since those are the games we hold both scoreboards for.
+      Remakes (under 5 minutes) are shown but never counted.</p>
+      <p>The models are re-fit <b>in your browser</b> every time the dataset refreshes or you toggle
+      the flex-only view, so scores always reflect the current data — a past game's score can drift
+      by a point as new games widen the comparison pool. The ratings replay every game in order,
+      oldest first, each time.</p>`)}
+  </div>`;
 }
 
 // Three result sets: champs-only for the roles set in the slots, the full

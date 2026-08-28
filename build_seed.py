@@ -131,9 +131,22 @@ def main():
                 # (same honesty rule as kg)
                 s["dmg"] += p.get("totalDamageDealtToChampions", 0)
                 s["dsecs"] += dur
-                r = s["roles"].setdefault(pos, {"games": 0, "wins": 0})
+                r = s["roles"].setdefault(pos, {"games": 0, "wins": 0,
+                                                "dmg": 0, "dsecs": 0,
+                                                "k": 0, "d": 0, "a": 0, "kg": 0,
+                                                "cs": 0, "secs": 0})
                 r["games"] += 1
                 r["wins"] += p["win"]
+                # per-role KDA / damage / CS sums, with kg / dsecs / secs
+                # counting what they cover (the honesty rule again)
+                r["dmg"] += p.get("totalDamageDealtToChampions", 0)
+                r["dsecs"] += dur
+                r["k"] += p.get("kills", 0)
+                r["d"] += p.get("deaths", 0)
+                r["a"] += p.get("assists", 0)
+                r["kg"] += 1
+                r["cs"] += cs_val
+                r["secs"] += dur
             q = pl["queues"].setdefault(qid, {"games": 0, "wins": 0})
             q["games"] += 1
             q["wins"] += p["win"]

@@ -132,7 +132,19 @@ function mergeMatch(state, m) {
       // damage/min sums; dsecs counts the seconds they cover (kg's rule)
       s.dmg = (s.dmg || 0) + (p.totalDamageDealtToChampions || 0);
       s.dsecs = (s.dsecs || 0) + dur;
-      bump(s.roles[pos] ??= { games: 0, wins: 0 }, p.win);
+      // per-role KDA / damage / CS sums; role records seeded before these
+      // fields existed keep accumulating from here, with kg / dsecs / secs
+      // counting what the sums cover (kg's rule)
+      const r = s.roles[pos] ??= { games: 0, wins: 0 };
+      bump(r, p.win);
+      r.dmg = (r.dmg || 0) + (p.totalDamageDealtToChampions || 0);
+      r.dsecs = (r.dsecs || 0) + dur;
+      r.k = (r.k || 0) + (p.kills || 0);
+      r.d = (r.d || 0) + (p.deaths || 0);
+      r.a = (r.a || 0) + (p.assists || 0);
+      r.kg = (r.kg || 0) + 1;
+      r.cs = (r.cs || 0) + csVal;
+      r.secs = (r.secs || 0) + dur;
     }
     bump(pl.queues[qid] ??= { games: 0, wins: 0 }, p.win);
     // slim history row for the profiles view, newest first, capped
