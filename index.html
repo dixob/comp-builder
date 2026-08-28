@@ -362,9 +362,13 @@
   }
   .tabs button:hover { color: var(--text-primary); }
   .tabs button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
-  /* top-level page switcher — same pill strip, sitting above whichever page is open */
-  .page-tabs { margin-bottom: var(--sp-4); }
-  .page-tabs button { font-size: 13px; padding: 7px 16px; }
+  /* top-level page switcher — same pill strip, sitting above whichever page
+     is open. Five pages outgrow a phone's width, so the strip caps at the
+     viewport and scrolls sideways (scrollbar hidden — the clipped pill at
+     the edge is the affordance) instead of overflowing the page. */
+  .page-tabs { margin-bottom: var(--sp-4); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .page-tabs::-webkit-scrollbar { display: none; }
+  .page-tabs button { font-size: 13px; padding: 7px 16px; white-space: nowrap; flex: none; }
   table { width: 100%; border-collapse: separate; border-spacing: 0 var(--sp-1); font-size: 14px; }
   th {
     text-align: left; color: var(--text-muted); font-weight: 500; font-size: 11px;
@@ -1813,6 +1817,10 @@ const pageNav = () => `<nav class="tabs page-tabs">
 function wirePageNav() {
   document.querySelectorAll("[data-page]").forEach(b =>
     b.addEventListener("click", () => setPage(b.dataset.page)));
+  // the strip scrolls on a phone and every render resets it — keep the
+  // active pill in view (a no-op on desktop, where nothing overflows)
+  const act = document.querySelector(".page-tabs button.active");
+  if (act) act.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 function setPage(p) {
