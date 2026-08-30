@@ -1,15 +1,11 @@
 # Scoring model
 
 How the comp builder turns raw records into the win-rate estimate on the score
-card. (The **Robert score** and **Robert rating** are a separate engine — see
-the in-app FAQ tab for the full explainer. Design notes live in the
-`--- impact score ---` and `--- Robert rating ---` comment blocks of
-[index.html](index.html): per-stat sign-clipped logistic fits with a
-log-scaled `(k+a)/(d+1)` KDA feature, percentiled within role; ratings are
-OpenSkill Plackett-Luce over score finishes with the standard τ dynamics
-term, flex-only on every surface.) All of this lives in the `--- scoring model ---` section of
+card. All of this lives in the `--- scoring model ---` section of
 [index.html](index.html) (constants around line 778, functions below them);
-the worker and fetch scripts only supply the data it reads.
+the worker and fetch scripts only supply the data it reads. (The per-game
+"Robert score" and OpenSkill "Robert rating" engine was removed from the app —
+its history lives in git if it ever comes back.)
 
 The estimate for a full five-man comp is:
 
