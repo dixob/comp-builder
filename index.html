@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Comp Builder</title>
-<link rel="icon" type="image/png" href="static/logo.png">
+<link rel="icon" type="image/svg+xml" href="static/logo-chibi.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1060,7 +1060,7 @@
 <div class="shell">
   <header>
     <div class="sigil">
-      <img src="static/logo.png" alt="Comp Builder mascot">
+      <img src="static/logo-chibi.svg" alt="Comp Builder mascot">
     </div>
     <div>
       <h1>Comp Builder</h1>
@@ -1089,7 +1089,12 @@ const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot",
 // meta WR (only games where these two PLAYERS piloted these two champs on the
 // same team), plus player-pair (duo) WR deviation vs 50%.
 const K_IND = 8;        // shrinkage prior weight for individual champ WR
-const K_PAIR = 20;      // shrinkage for pair stats (small samples)
+const K_PAIR = 20;      // shrinkage for duo (player-pair) stats — real samples, median ~40 games
+// Pilot-attributed champ pairs are all tiny samples (5-8 games at best), and a
+// 5-stack's ten pair rows re-count the SAME few games — one win streak on one
+// comp showed up as +12pp of "synergy". ~100 shared games for half weight
+// keeps the term honest: it stays near-silent until a pairing has real evidence.
+const K_CHAMP_PAIR = 100;
 const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
 const SYNERGY_WEIGHT = 0.5;      // how much a pair's WR deviation counts
 // The ten duo records in a 5-stack largely re-count the SAME games, so summing
@@ -1433,7 +1438,7 @@ function champPairAdjRaw(pa, ca, pb, cb) {
   // Expected pair WR is the mean of the two champs' meta WRs, so champion
   // strength isn't double-counted as "synergy".
   const expected = (metaWR(ca, null) + metaWR(cb, null)) / 2;
-  return (shrunk(s.wins, s.games, K_PAIR, expected) - expected) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
+  return (shrunk(s.wins, s.games, K_CHAMP_PAIR, expected) - expected) * SYNERGY_WEIGHT * (s.games / (s.games + 10));
 }
 const champPairAdj = (A, B) => champPairAdjRaw(A.player, A.champ, B.player, B.champ);
 
@@ -1861,9 +1866,15 @@ function wirePageNav() {
   document.querySelectorAll("[data-page]").forEach(b =>
     b.addEventListener("click", () => setPage(b.dataset.page)));
   // the strip scrolls on a phone and every render resets it — keep the
-  // active pill in view (a no-op on desktop, where nothing overflows)
+  // active pill in view by scrolling the STRIP, never scrollIntoView: that
+  // walks every scrollable ancestor and yanked the page ~357px down on load.
   const act = document.querySelector(".page-tabs button.active");
-  if (act) act.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const strip = act && act.closest(".page-tabs");
+  if (strip && strip.scrollWidth > strip.clientWidth) {
+    const lo = act.offsetLeft, hi = lo + act.offsetWidth;
+    if (lo < strip.scrollLeft) strip.scrollLeft = lo;
+    else if (hi > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = hi - strip.clientWidth;
+  }
 }
 
 function setPage(p) {
