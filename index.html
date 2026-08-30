@@ -1966,10 +1966,12 @@ function render() {
   // the squad card's sliders and their board-head mirrors drive the same state
   const filtersChanged = () => {
     candCache = {};  // candidate lists depend on the filters
+    const had = !!rankedTabs[rolesLocked() ? "assigned" : activeTab];
     rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
     updateSquadNotes();
     renderSlots();
     renderScore();
+    rerunActiveSearch(had);
   };
   const setMasteryRange = (lo, hi) => {
     masteryMin = lo; masteryMax = hi;
@@ -3723,6 +3725,25 @@ function uniqueList(tab, results) {
   return out;
 }
 
+// Filters changed while results were on screen: re-run the visible search
+// once input settles. A slider drag fires dozens of input events and the
+// full search costs a few hundred ms, so it waits 250ms past the last one
+// instead of running per tick. Only when a list was actually showing — a
+// board nobody has optimized yet stays quiet.
+let refilterTimer = null, refilterPending = false;
+function rerunActiveSearch(had) {
+  clearTimeout(refilterTimer);
+  // `had` is false for every input event after the first of a drag (the
+  // first one already threw the results away) — the pending flag keeps the
+  // rerun alive across the whole drag instead of letting tick two cancel it.
+  refilterPending = (had || refilterPending) && page === "builder";
+  if (!refilterPending) return;
+  refilterTimer = setTimeout(() => {
+    refilterPending = false;
+    if (page === "builder") switchTab(activeTab);
+  }, 250);
+}
+
 function switchTab(tab) {
   // A role-agnostic search contradicts a locked board, so while the lock is on
   // there is only one list — asking for "overall" gets the champs-only one.
@@ -4067,8 +4088,10 @@ function initRoleToggle() {
     const m = $("#roleToggle2");
     if (m) m.classList.toggle("active", strictRole);
     indCache = {}; candCache = {};  // scores depend on the mode
+    const had = !!rankedTabs[rolesLocked() ? "assigned" : activeTab];
     rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
     renderChips(); renderSlots(); renderScore();
+    rerunActiveSearch(had);
   });
 }
 
