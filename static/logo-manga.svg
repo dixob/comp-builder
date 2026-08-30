@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 503">
+  <defs>
+    <pattern id="tone" width="9" height="9" patternUnits="userSpaceOnUse">
+      <circle cx="2.5" cy="2.5" r="1.7" fill="#5a5a5a"/>
+      <circle cx="7" cy="7" r="1.7" fill="#5a5a5a"/>
+    </pattern>
+    <clipPath id="mbody">
+      <path d="M 80 310 C 80 212 152 162 242 162 C 332 162 404 212 404 310 C 404 392 338 452 242 452 C 146 452 80 392 80 310 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- angular side limbs -->
+  <path d="M 62 372 L 22 402 L 56 416 L 26 456 L 92 446 L 70 406 L 96 386 Z" fill="#111111"/>
+  <path d="M 423 372 L 463 402 L 429 416 L 459 456 L 393 446 L 415 406 L 389 386 Z" fill="#111111"/>
+
+  <!-- side arms -->
+  <ellipse cx="88" cy="348" rx="42" ry="52" fill="url(#tone)" stroke="#111111" stroke-width="7"/>
+  <ellipse cx="396" cy="348" rx="42" ry="52" fill="url(#tone)" stroke="#111111" stroke-width="7"/>
+
+  <!-- bottom spikes -->
+  <polygon points="118,428 162,428 140,482" fill="#111111"/>
+  <polygon points="178,440 222,440 200,494" fill="#111111"/>
+  <polygon points="262,440 306,440 284,494" fill="#111111"/>
+  <polygon points="322,428 366,428 344,482" fill="#111111"/>
+
+  <!-- inked body with screentone shading -->
+  <path d="M 80 310 C 80 212 152 162 242 162 C 332 162 404 212 404 310 C 404 392 338 452 242 452 C 146 452 80 392 80 310 Z"
+        fill="#ffffff" stroke="#111111" stroke-width="8"/>
+  <g clip-path="url(#mbody)">
+    <path d="M 60 350 Q 180 310 300 350 L 330 470 L 60 470 Z" fill="url(#tone)"/>
+    <path d="M 242 162 L 242 452" stroke="#111111" stroke-width="4"/>
+    <path d="M 158 178 Q 140 300 168 440" stroke="#111111" stroke-width="3" fill="none"/>
+    <path d="M 326 178 Q 344 300 316 440" stroke="#111111" stroke-width="3" fill="none"/>
+  </g>
+
+  <!-- glasses + eyes: purple is the only color -->
+  <path d="M 226 262 L 258 262" stroke="#111111" stroke-width="9"/>
+  <circle cx="178" cy="272" r="50" fill="#ffffff" stroke="#111111" stroke-width="9"/>
+  <circle cx="306" cy="272" r="50" fill="#ffffff" stroke="#111111" stroke-width="9"/>
+
+  <circle cx="178" cy="274" r="27" fill="#c026d3"/>
+  <circle cx="178" cy="276" r="12" fill="#111111"/>
+  <circle cx="167" cy="262" r="8" fill="#ffffff"/>
+  <path d="M 138 240 Q 178 218 218 240" stroke="#111111" stroke-width="7" fill="none" stroke-linecap="round"/>
+
+  <circle cx="306" cy="274" r="27" fill="#c026d3"/>
+  <circle cx="306" cy="276" r="12" fill="#111111"/>
+  <circle cx="295" cy="262" r="8" fill="#ffffff"/>
+  <path d="M 266 240 Q 306 218 346 240" stroke="#111111" stroke-width="7" fill="none" stroke-linecap="round"/>
+
+  <!-- smile -->
+  <path d="M 214 336 Q 242 362 270 336" stroke="#111111" stroke-width="7" fill="none" stroke-linecap="round"/>
+
+  <!-- laurel (hatched) + cap -->
+  <path d="M 168 116 Q 138 82 168 38 Q 196 68 186 116 Z" fill="#ffffff" stroke="#111111" stroke-width="6"/>
+  <path d="M 158 96 L 180 82 M 154 76 L 176 62 M 158 56 L 176 46" stroke="#111111" stroke-width="3"/>
+  <path d="M 316 116 Q 346 82 316 38 Q 288 68 298 116 Z" fill="#ffffff" stroke="#111111" stroke-width="6"/>
+  <path d="M 326 96 L 304 82 M 330 76 L 308 62 M 326 56 L 308 46" stroke="#111111" stroke-width="3"/>
+  <path d="M 190 118 L 294 118 L 284 150 L 200 150 Z" fill="#111111"/>
+  <polygon points="242,30 358,86 242,142 126,86" fill="#111111"/>
+  <line x1="242" y1="44" x2="242" y2="114" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="242" cy="44" r="6" fill="#ffffff"/>
+  <circle cx="242" cy="122" r="9" fill="#ffffff" stroke="#111111" stroke-width="4"/>
+
+  <!-- manga emphasis strokes -->
+  <path d="M 66 150 L 96 170 M 52 190 L 84 202" stroke="#111111" stroke-width="5" stroke-linecap="round"/>
+  <path d="M 419 150 L 389 170 M 433 190 L 401 202" stroke="#111111" stroke-width="5" stroke-linecap="round"/>
+</svg>

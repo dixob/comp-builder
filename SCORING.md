@@ -117,10 +117,10 @@ pick pool if the player opts in.
 ## 3. Synergy — pairwise adjustments in `compScore`
 
 Two independent terms, summed over all 10 pairs in the comp. Both use heavier
-shrinkage than the individual term (`K_PAIR = 20`) because pair samples are
-tiny, both are scaled by `SYNERGY_WEIGHT = 0.5`, and both carry an extra
-confidence ramp `g / (g + 10)` so a 2-game record moves the needle far less
-than a 20-game one.
+shrinkage than the individual term because pair samples are tiny — duos at
+`K_PAIR = 20`, champ pairs at `K_CHAMP_PAIR = 100` — both are scaled by
+`SYNERGY_WEIGHT = 0.5`, and both carry an extra confidence ramp
+`g / (g + 10)` so a 2-game record moves the needle far less than a 20-game one.
 
 ### Champ-pair synergy — `champPairAdj`
 
@@ -132,13 +132,19 @@ win rates — so plain champion strength isn't double-counted as "synergy":
 
 ```
 expected = (metaWR(a) + metaWR(b)) / 2
-adj = (shrunk(wins, games, 20, expected) − expected) × 0.5 × games/(games + 10)
+adj = (shrunk(wins, games, 100, expected) − expected) × 0.5 × games/(games + 10)
 ```
 
-> **Known weakness**: every champ-pair row in the current data sits at 2–5
-> games, so this term is mostly noise today. [META_SYNERGY_SPEC.md](META_SYNERGY_SPEC.md)
-> specs replacing the flat `expected` baseline with OP.GG's champion-pair
-> synergy stats (spec only, not implemented).
+`K_CHAMP_PAIR = 100` (spec §3a) is deliberately heavy: every champ-pair row in
+the current data sits at 2–8 games, and a 5-stack's ten pair rows re-count the
+same few games — before the damping, one 6-game win streak on one comp summed
+to +12pp of "synergy" and dominated the optimizer. At 100 phantom games the
+term is near-silent until a pairing has real evidence (~100 shared games for
+half weight).
+
+> **Known weakness**: with the personal term damped, no meta-level pair signal
+> replaces it yet. [META_SYNERGY_SPEC.md](META_SYNERGY_SPEC.md) specs adding
+> OP.GG's champion-pair synergy stats as the prior (spec only, not implemented).
 
 ### Player-pair (duo) synergy — `playerPairAdj`
 
@@ -192,7 +198,8 @@ once.
 | Constant | Value | Meaning |
 |---|---|---|
 | `K_IND` | 8 | phantom games toward the meta prior, individual WR |
-| `K_PAIR` | 20 | phantom games, both synergy terms |
+| `K_PAIR` | 20 | phantom games, duo (player-pair) synergy |
+| `K_CHAMP_PAIR` | 100 | phantom games, pilot champ-pair synergy |
 | `SYNERGY_WEIGHT` | 0.5 | scale on both synergy deviations |
 | `PAIR_OVERLAP_DISCOUNT` | 0.25 | de-duplicates overlapping duo records |
 | `MASTERY_MAX_BONUS` | 0.03 | mastery bonus cap (at 200k points) |

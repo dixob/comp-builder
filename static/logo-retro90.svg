@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 503">
+  <defs>
+    <clipPath id="rbody">
+      <path d="M 80 310 C 80 212 152 162 242 162 C 332 162 404 212 404 310 C 404 392 338 452 242 452 C 146 452 80 392 80 310 Z"/>
+    </clipPath>
+    <clipPath id="rlensL"><circle cx="178" cy="272" r="50"/></clipPath>
+    <clipPath id="rlensR"><circle cx="306" cy="272" r="50"/></clipPath>
+  </defs>
+
+  <!-- angular side limbs -->
+  <path d="M 62 372 L 22 402 L 56 416 L 26 456 L 92 446 L 70 406 L 96 386 Z" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M 423 372 L 463 402 L 429 416 L 459 456 L 393 446 L 415 406 L 389 386 Z" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- side arms -->
+  <ellipse cx="88" cy="348" rx="42" ry="52" fill="#57457a" stroke="#2b2340" stroke-width="6"/>
+  <ellipse cx="396" cy="348" rx="42" ry="52" fill="#57457a" stroke="#2b2340" stroke-width="6"/>
+
+  <!-- bottom spikes -->
+  <polygon points="118,428 162,428 140,482" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="178,440 222,440 200,494" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="262,440 306,440 284,494" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+  <polygon points="322,428 366,428 344,482" fill="#453a63" stroke="#2b2340" stroke-width="6" stroke-linejoin="round"/>
+
+  <!-- body with hard cel shading -->
+  <path d="M 80 310 C 80 212 152 162 242 162 C 332 162 404 212 404 310 C 404 392 338 452 242 452 C 146 452 80 392 80 310 Z"
+        fill="#6d5a8f" stroke="#2b2340" stroke-width="7"/>
+  <g clip-path="url(#rbody)">
+    <path d="M 60 340 L 250 300 L 300 340 L 330 470 L 60 470 Z" fill="#57457a"/>
+    <path d="M 140 190 Q 210 158 268 172 L 258 196 Q 200 184 152 214 Z" fill="#8b78ae"/>
+  </g>
+
+  <!-- heavy retro eyelids -->
+  <path d="M 132 240 Q 178 214 224 240" stroke="#2b2340" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M 260 240 Q 306 214 352 240" stroke="#2b2340" stroke-width="9" fill="none" stroke-linecap="round"/>
+
+  <!-- glasses + eyes -->
+  <path d="M 224 262 L 260 262" stroke="#2b2340" stroke-width="9"/>
+  <circle cx="178" cy="272" r="50" fill="#f1e9d8" stroke="#2b2340" stroke-width="9"/>
+  <circle cx="306" cy="272" r="50" fill="#f1e9d8" stroke="#2b2340" stroke-width="9"/>
+
+  <ellipse cx="178" cy="274" rx="26" ry="30" fill="#b8489e"/>
+  <ellipse cx="178" cy="278" rx="11" ry="15" fill="#241b38"/>
+  <rect x="166" y="252" width="12" height="12" fill="#fdf8ec"/>
+
+  <ellipse cx="306" cy="274" rx="26" ry="30" fill="#b8489e"/>
+  <ellipse cx="306" cy="278" rx="11" ry="15" fill="#241b38"/>
+  <rect x="294" y="252" width="12" height="12" fill="#fdf8ec"/>
+
+  <!-- anime lens glare -->
+  <g clip-path="url(#rlensL)" opacity="0.5">
+    <path d="M 150 310 L 200 222 L 214 222 L 164 310 Z" fill="#ffffff"/>
+    <path d="M 172 310 L 222 222 L 228 222 L 178 310 Z" fill="#ffffff"/>
+  </g>
+  <g clip-path="url(#rlensR)" opacity="0.5">
+    <path d="M 278 310 L 328 222 L 342 222 L 292 310 Z" fill="#ffffff"/>
+    <path d="M 300 310 L 350 222 L 356 222 L 306 310 Z" fill="#ffffff"/>
+  </g>
+
+  <!-- mouth -->
+  <path d="M 214 338 Q 242 362 270 338" stroke="#2b2340" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <path d="M 226 352 Q 242 360 258 352" stroke="#57457a" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- laurel + cap, cel shaded -->
+  <path d="M 168 118 Q 138 84 168 40 Q 196 70 186 118 Z" fill="#6d9457" stroke="#2b2340" stroke-width="6"/>
+  <path d="M 316 118 Q 346 84 316 40 Q 288 70 298 118 Z" fill="#6d9457" stroke="#2b2340" stroke-width="6"/>
+  <path d="M 190 118 L 294 118 L 284 150 L 200 150 Z" fill="#1d1a22" stroke="#2b2340" stroke-width="6"/>
+  <polygon points="242,32 358,86 242,140 126,86" fill="#26222b" stroke="#2b2340" stroke-width="7" stroke-linejoin="round"/>
+  <polygon points="242,32 358,86 242,140 242,110 310,86 242,55" fill="#17141c"/>
+  <line x1="242" y1="40" x2="242" y2="114" stroke="#c19a3f" stroke-width="4"/>
+  <circle cx="242" cy="40" r="6" fill="#c19a3f"/>
+  <circle cx="242" cy="122" r="9" fill="#c19a3f" stroke="#2b2340" stroke-width="4"/>
+</svg>

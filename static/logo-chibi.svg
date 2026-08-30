@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 503">
+  <defs>
+    <radialGradient id="cbody" cx="0.42" cy="0.3" r="0.95">
+      <stop offset="0" stop-color="#ab91d8"/>
+      <stop offset="0.6" stop-color="#8a68c0"/>
+      <stop offset="1" stop-color="#75529d"/>
+    </radialGradient>
+    <radialGradient id="ciris" cx="0.5" cy="0.35" r="0.8">
+      <stop offset="0" stop-color="#ff8ae4"/>
+      <stop offset="0.65" stop-color="#e14fd2"/>
+      <stop offset="1" stop-color="#a825b8"/>
+    </radialGradient>
+  </defs>
+
+  <!-- soft side arms -->
+  <circle cx="90" cy="352" r="40" fill="#6b4d94"/>
+  <circle cx="394" cy="352" r="40" fill="#6b4d94"/>
+
+  <!-- rounded nub legs -->
+  <path d="M 128 432 Q 148 486 168 432 Z" fill="#5b4184"/>
+  <path d="M 185 442 Q 205 496 225 442 Z" fill="#5b4184"/>
+  <path d="M 259 442 Q 279 496 299 442 Z" fill="#5b4184"/>
+  <path d="M 316 432 Q 336 486 356 432 Z" fill="#5b4184"/>
+
+  <!-- body -->
+  <circle cx="242" cy="305" r="150" fill="url(#cbody)"/>
+  <ellipse cx="242" cy="415" rx="118" ry="42" fill="#5f4390" opacity="0.22"/>
+
+  <!-- blush -->
+  <ellipse cx="122" cy="342" rx="22" ry="12" fill="#ff9fd0" opacity="0.65"/>
+  <ellipse cx="362" cy="342" rx="22" ry="12" fill="#ff9fd0" opacity="0.65"/>
+
+  <!-- glasses + eyes -->
+  <path d="M 232 262 Q 242 254 252 262" stroke="#40305e" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <circle cx="176" cy="275" r="62" fill="#ffffff" stroke="#40305e" stroke-width="7"/>
+  <circle cx="308" cy="275" r="62" fill="#ffffff" stroke="#40305e" stroke-width="7"/>
+
+  <circle cx="176" cy="275" r="40" fill="url(#ciris)"/>
+  <ellipse cx="176" cy="280" rx="16" ry="20" fill="#2c1e45"/>
+  <circle cx="163" cy="260" r="13" fill="#ffffff"/>
+  <circle cx="188" cy="292" r="6" fill="#ffffff" opacity="0.85"/>
+
+  <circle cx="308" cy="275" r="40" fill="url(#ciris)"/>
+  <ellipse cx="308" cy="280" rx="16" ry="20" fill="#2c1e45"/>
+  <circle cx="295" cy="260" r="13" fill="#ffffff"/>
+  <circle cx="320" cy="292" r="6" fill="#ffffff" opacity="0.85"/>
+
+  <!-- cat-mouth smile -->
+  <path d="M 220 340 Q 231 352 242 341 Q 253 352 264 340" stroke="#4a3568" stroke-width="6" fill="none" stroke-linecap="round"/>
+
+  <!-- graduation cap, cutely tilted -->
+  <g transform="rotate(-9 242 95)">
+    <path d="M 170 76 Q 148 40 184 38 Q 189 68 170 76 Z" fill="#7cab63"/>
+    <path d="M 314 76 Q 336 40 300 38 Q 295 68 314 76 Z" fill="#7cab63"/>
+    <path d="M 187 122 L 297 122 L 286 154 L 198 154 Z" fill="#232028"/>
+    <polygon points="242,40 352,90 242,140 132,90" fill="#2f2b33"/>
+    <line x1="242" y1="46" x2="242" y2="118" stroke="#d8a63f" stroke-width="4"/>
+    <circle cx="242" cy="46" r="6" fill="#d8a63f"/>
+    <circle cx="242" cy="126" r="9" fill="#e6b64f"/>
+    <circle cx="239" cy="123" r="3" fill="#f7dd9a"/>
+  </g>
+
+  <!-- sparkles -->
+  <path d="M 66 178 L 70 190 L 82 194 L 70 198 L 66 210 L 62 198 L 50 194 L 62 190 Z" fill="#ffffff" opacity="0.9"/>
+  <path d="M 420 148 L 423 157 L 432 160 L 423 163 L 420 172 L 417 163 L 408 160 L 417 157 Z" fill="#ffe9a8" opacity="0.9"/>
+  <path d="M 428 400 L 430 407 L 437 409 L 430 411 L 428 418 L 426 411 L 419 409 L 426 407 Z" fill="#ffffff" opacity="0.8"/>
+</svg>
