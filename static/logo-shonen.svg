@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485 503">
+  <!-- action burst -->
+  <polygon fill="#372b55" points="
+    487,280 358,311 454,403 327,365 365,492 273,396 242,525 211,396 119,492 157,365
+    30,403 126,311 -3,280 126,249 30,158 157,195 119,68 211,164 242,35 273,164
+    365,68 327,195 454,158 358,249"/>
+
+  <g transform="rotate(-5 242 300)">
+    <!-- angular side limbs -->
+    <path d="M 62 372 L 18 404 L 54 420 L 24 460 L 96 448 L 72 406 L 98 386 Z" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M 423 372 L 467 404 L 431 420 L 461 460 L 389 448 L 413 406 L 387 386 Z" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+
+    <!-- side arms -->
+    <ellipse cx="88" cy="348" rx="42" ry="52" fill="#4c2e86" stroke="#16102a" stroke-width="8"/>
+    <ellipse cx="396" cy="348" rx="42" ry="52" fill="#4c2e86" stroke="#16102a" stroke-width="8"/>
+
+    <!-- aggressive bottom spikes -->
+    <polygon points="112,424 160,424 132,494" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+    <polygon points="174,438 220,438 194,502" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+    <polygon points="264,438 310,438 290,502" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+    <polygon points="324,424 372,424 352,494" fill="#241b3d" stroke="#16102a" stroke-width="8" stroke-linejoin="round"/>
+
+    <!-- body -->
+    <path d="M 80 310 C 80 210 152 160 242 160 C 332 160 404 210 404 310 C 404 392 338 452 242 452 C 146 452 80 392 80 310 Z"
+          fill="#7a4fc9" stroke="#16102a" stroke-width="9"/>
+    <path d="M 132 206 L 240 170 L 214 200 L 148 238 Z" fill="#ffffff" opacity="0.22"/>
+
+    <!-- determined eyebrows -->
+    <polygon points="118,210 208,238 203,254 116,224" fill="#16102a"/>
+    <polygon points="366,210 276,238 281,254 368,224" fill="#16102a"/>
+
+    <!-- glasses + eyes -->
+    <path d="M 226 264 L 258 264" stroke="#16102a" stroke-width="10"/>
+    <circle cx="178" cy="276" r="52" fill="#ffffff" stroke="#16102a" stroke-width="10"/>
+    <circle cx="306" cy="276" r="52" fill="#ffffff" stroke="#16102a" stroke-width="10"/>
+
+    <circle cx="178" cy="278" r="28" fill="#e935cf"/>
+    <circle cx="178" cy="280" r="12" fill="#16102a"/>
+    <polygon points="164,258 182,262 168,274" fill="#ffffff"/>
+
+    <circle cx="306" cy="278" r="28" fill="#e935cf"/>
+    <circle cx="306" cy="280" r="12" fill="#16102a"/>
+    <polygon points="292,258 310,262 296,274" fill="#ffffff"/>
+
+    <!-- confident grin -->
+    <path d="M 186 334 Q 242 400 298 334 Q 242 366 186 334 Z" fill="#16102a"/>
+    <path d="M 196 340 Q 242 364 288 340 L 282 352 Q 242 372 202 352 Z" fill="#ffffff"/>
+
+    <!-- laurel + cap -->
+    <path d="M 166 116 Q 132 80 166 34 Q 198 66 188 116 Z" fill="#5c8a44" stroke="#16102a" stroke-width="7"/>
+    <path d="M 318 116 Q 352 80 318 34 Q 286 66 296 116 Z" fill="#5c8a44" stroke="#16102a" stroke-width="7"/>
+    <path d="M 190 118 L 294 118 L 284 150 L 200 150 Z" fill="#1d1a22" stroke="#16102a" stroke-width="7"/>
+    <polygon points="242,28 362,86 242,144 122,86" fill="#26222b" stroke="#16102a" stroke-width="9" stroke-linejoin="round"/>
+    <line x1="242" y1="38" x2="242" y2="116" stroke="#e0ad3a" stroke-width="5"/>
+    <circle cx="242" cy="38" r="7" fill="#e0ad3a"/>
+    <circle cx="242" cy="124" r="10" fill="#e0ad3a" stroke="#16102a" stroke-width="4"/>
+  </g>
+</svg>
