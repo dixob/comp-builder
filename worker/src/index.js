@@ -360,6 +360,27 @@ export class DraftHub {
     this.ctx = ctx;
   }
 
+  // A dead bridge must not strand a draft: its last heartbeat leaves
+  // active:true, and every client keeps honoring the bans and role pins —
+  // which the page offers no way to remove, because live entries belong to
+  // the bridge. Three missed heartbeats means the draft is over: flip it
+  // inactive in storage as a real transition (fresh ts, pushed to sockets —
+  // clients dedupe on ts, so serving the old ts would never reach them).
+  async liveDraft() {
+    const raw = await this.ctx.storage.get("draft");
+    if (!raw) return raw;
+    const draft = JSON.parse(raw);
+    if (!draft.active || Date.now() - (draft.ts || 0) < OWNER_TTL_MS) return raw;
+    draft.active = false;
+    draft.ts = Date.now();
+    const body = JSON.stringify(draft);
+    await this.ctx.storage.put("draft", body);
+    for (const ws of this.ctx.getWebSockets()) {
+      try { ws.send(body); } catch { /* peer gone; close event cleans up */ }
+    }
+    return body;
+  }
+
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname.endsWith("/ws")) {
@@ -367,7 +388,7 @@ export class DraftHub {
         return json({ error: "websocket upgrade required" }, 426);
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]);
-      const draft = await this.ctx.storage.get("draft");
+      const draft = await this.liveDraft();
       if (draft) pair[1].send(draft);
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
@@ -390,7 +411,7 @@ export class DraftHub {
       }
       return json({ ok: true, ts: draft.ts, listeners: this.ctx.getWebSockets().length });
     }
-    const draft = await this.ctx.storage.get("draft");
+    const draft = await this.liveDraft();
     return new Response(draft || "{}", { headers: {
       "content-type": "application/json", "cache-control": "no-store", ...CORS } });
   }
