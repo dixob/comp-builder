@@ -168,6 +168,12 @@ once.
   range, and draft availability (bans, enemy picks, fearless-session champs,
   champs locked by another ally, champs the player agreed to draft around
   after a hard-counter flag). Outside these a champ is simply not a pick.
+  Fearless-session champs come from comp matching: a finished flex game in
+  the rolling last 6 hours whose five players and champs exactly match a
+  current top-10 comp (general or No-repeats list) locks those five
+  champions out until the game ages past the window. Match verdicts are
+  cached per match id, so a list shifting under new filters never
+  un-excludes a comp already played.
 - **Role viability** (`roleViable`) — the champ must have a real personal
   sample in the role (≥10 games) or real meta presence there (≥100 games and
   ≥10% role rate). Soft: the candidate list degrades tier by tier rather than

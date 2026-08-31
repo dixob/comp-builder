@@ -1154,18 +1154,28 @@ const allyTakenElsewhere = (cid, role) => {
 const liveLocked = (role, champ) =>
   champ != null && liveOurs.some(p => p.position === role && p.championId === champ);
 const allyLocked = (role, champ) => draftMode && (allyLock.has(role) || liveLocked(role, champ));
-// Fearless session: a champ one of our players already took into a finished
-// flex game this session can't be picked again. Fed by the worker's /fearless
-// endpoint (match history), so it counts real games — not champ selects — and
-// works no matter which machine ran the bridge. Session-scoped, not
-// draft-scoped: it survives Clear and individual drafts, and only the toggle
-// ends it.
-const FEARLESS_LOOKBACK_S = 3 * 3600;
+// Fearless session: a finished flex game from the rolling last 6 hours whose
+// five players and five champs exactly match one of the current top-10 comps
+// (the general list or the No-repeats list) locks those champions out of
+// suggestions until the game ages out of the window. Fed by the worker's
+// /fearless endpoint (match history), so it counts real games — not champ
+// selects — and needs no bridge: the page recognises a replayed
+// recommendation entirely on its own. Matched games are cached by match id
+// (a list that shifts under new filters must not un-exclude a comp already
+// played), and exclusions apply with or without draft mode.
+const FEARLESS_WINDOW_S = 6 * 3600;
 let fearless = localStorage.getItem("fearless") === "1";
-let fearlessSince = +(localStorage.getItem("fearlessSince") || 0);
-let fearlessPicks = JSON.parse(localStorage.getItem("fearlessPicks") || "[]");
-let fearlessChamps = new Set(fearlessPicks.map(p => p.championId));
-const effFearless = () => draftMode && fearless ? fearlessChamps : new Set();
+let fearlessSince = +(localStorage.getItem("fearlessSince") || 0); // toggle-on time, for the 24h auto-off
+// [{id, end, champs: [cid×5] | 0}] — champs present means the game matched a
+// top-10 comp when it was first seen; 0 means evaluated and not a match.
+let fearlessEval = JSON.parse(localStorage.getItem("fearlessEval") || "[]");
+localStorage.removeItem("fearlessPicks"); // pre-comp-matching format
+let fearlessChamps = new Set();
+// Matching compares played games against the lists computed WITHOUT the
+// fearless exclusions — otherwise a matched comp drops off the list and
+// un-matches on the next poll.
+let fearlessSuppress = false;
+const effFearless = () => fearless && !fearlessSuppress ? fearlessChamps : new Set();
 let autoSwapNote = null;     // "Tristana → Kai'Sa" — last automatic dead-pick swap
 // Win-probability ticker: the hero number animates between values, a delta
 // chip names what moved it, and a per-draft log feeds the trend sparkline.
@@ -1181,8 +1191,11 @@ const MATCHUP_CAP = 0.03;      // per-lane-opponent cap (±3pp)
 
 const effBans = () => draftMode ? new Set([...manualBans, ...liveBans]) : new Set();
 const effEnemy = () => draftMode ? new Set([...manualEnemy, ...liveEnemy]) : new Set();
+// Fearless exclusions bite even outside draft mode — the whole point is that
+// the top-comps lists stop re-suggesting a played comp without the bridge
+// (or the draft card) being involved at all.
 const draftUnavailable = cid =>
-  draftMode && (effBans().has(cid) || effEnemy().has(cid) || effFearless().has(cid));
+  (draftMode && (effBans().has(cid) || effEnemy().has(cid))) || effFearless().has(cid);
 
 const shrunk = (wins, games, k, prior = 0.5) => (wins + prior * k) / (games + k);
 
@@ -1944,6 +1957,8 @@ function render() {
           <h2 style="margin-bottom:14px"><span id="rankedHead">Top compositions</span>
             <button class="btn toggle ${uniqueComps ? "active" : ""}" id="uniqueToggle" style="margin-left:10px"
               title="Each comp only lists players on champs they don't already hold in a higher comp">No repeats</button>
+            <button class="btn toggle ${fearless ? "active" : ""}" id="fearlessBtn2" style="margin-left:6px"
+              title="Fearless session: a finished flex game from the past 6 hours whose five players and champs exactly match one of these top-10 comps (either list) locks those champions out of suggestions until the game ages out. No bridge needed.">Fearless</button>
             <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
               <button id="tabOverall">Best overall</button>
@@ -2024,6 +2039,7 @@ function render() {
     $("#uniqueToggle").classList.toggle("active", uniqueComps);
     renderTabs();  // pools are cached at RANKED_POOL depth — no recompute
   });
+  $("#fearlessBtn2").addEventListener("click", toggleFearless);
   renderDraft();
   renderSlots();
   renderScore();
@@ -2090,7 +2106,7 @@ function renderDraft() {
     <h2>Summoner's Rift
       <span class="draft-state"><span class="live-dot" id="liveDot"></span><span id="liveMsg"></span></span>
       <button class="btn toggle ${fearless ? "active" : ""}" id="fearlessBtn"
-        title="Fearless session: champs we already played in finished flex games can't be picked again. Turning it on also counts games from the past 3 hours, so a session started at game two still knows about game one.">Fearless</button>
+        title="Fearless session: a finished flex game from the rolling past 6 hours whose five players and champs exactly match a current top-10 comp (general or No-repeats list) locks those champions out of suggestions until the game ages out.">Fearless</button>
       <button class="btn toggle ${lockRoles ? "active" : ""}" id="roleLockBtn"
         title="We're playing these roles: bans and enemy picks only re-pick champions — nothing reshuffles who plays where. Drag a pin to reassign a role by hand.">Lock roles</button>
       ${manualBans.size || manualEnemy.size || allyLock.size
@@ -2108,11 +2124,11 @@ function renderDraft() {
     </div>
     ${fearless ? `<div class="draft-row">
       <span class="dlabel">Played</span>
-      ${fearlessPicks.map(p => `<span class="dchip dchip-fear"
-          title="${champName(p.championId)} — ${p.riotId.split("#")[0]} already played it this session">
-        <img src="${champIcon(p.championId)}" alt="${champName(p.championId)}">
+      ${[...fearlessChamps].map(cid => `<span class="dchip dchip-fear"
+          title="${champName(cid)} — part of a recommended comp we already played in the past 6 hours">
+        <img src="${champIcon(cid)}" alt="${champName(cid)}">
       </span>`).join("")
-      || `<span class="hint" style="margin:0">no finished flex games in the session yet</span>`}
+      || `<span class="hint" style="margin:0">no recommended comps replayed in the past 6 hours yet</span>`}
     </div>` : ""}
     <div class="hint rift-hint" style="margin-bottom:var(--sp-2)">Tap a blue pin to lock that pick in — re-optimizing picks around it. Drag one onto another lane to swap roles.${anyGuess ? " Dashed enemy pins are lane guesses — tap one to lock its lane or remove it." : ""}</div>
     ${enemy.length ? answersBlock() : ""}
@@ -2147,25 +2163,7 @@ function renderDraft() {
     ensureEnemyCounters(cid);
     noteEvent("enemy locked " + champName(cid));
   });
-  el.querySelector("#fearlessBtn").addEventListener("click", () => {
-    fearless = !fearless;
-    localStorage.setItem("fearless", fearless ? "1" : "0");
-    if (fearless) {
-      // The lookback is what lets the toggle come on mid-session: game one is
-      // already in match history, so it's counted even though nobody had
-      // fearless on while it was played.
-      fearlessSince = Math.floor(Date.now() / 1000) - FEARLESS_LOOKBACK_S;
-      localStorage.setItem("fearlessSince", fearlessSince);
-      fetchFearless();
-    } else {
-      fearlessSince = 0;
-      fearlessPicks = [];
-      fearlessChamps = new Set();
-      localStorage.removeItem("fearlessSince");
-      localStorage.removeItem("fearlessPicks");
-    }
-    draftChanged();
-  });
+  el.querySelector("#fearlessBtn").addEventListener("click", toggleFearless);
   el.querySelector("#roleLockBtn").addEventListener("click", () => {
     lockRoles = !lockRoles;
     localStorage.setItem("lockRoles", lockRoles ? "1" : "0");
@@ -2797,30 +2795,96 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-// Pull the fearless session's finished flex games from the worker and rebuild
-// the exclusion set. Runs on toggle-on, when a champ select opens, and on a
-// slow poll — match-v5 lags a game's end by a minute or two, so any single
-// moment can miss; the poll is the backstop.
+// Rebuild the exclusion set from the cached verdicts, dropping games that
+// have aged past the rolling window. Returns whether the set changed.
+function rebuildFearlessChamps() {
+  const cutoff = Date.now() - FEARLESS_WINDOW_S * 1000;
+  fearlessEval = fearlessEval.filter(e => e.end >= cutoff);
+  const next = new Set(fearlessEval.flatMap(e => e.champs || []));
+  const changed = next.size !== fearlessChamps.size || [...next].some(c => !fearlessChamps.has(c));
+  fearlessChamps = next;
+  return changed;
+}
+
+// Judge each not-yet-seen five-stack game against the current top-10 comps —
+// the general list plus the No-repeats variant — and cache the verdict by
+// match id. A game matches when its five players AND five champions equal a
+// listed comp's, regardless of who ended up on which champ (in-game role
+// swaps are noise). Verdicts are permanent for the game's stay in the
+// window: filters shifting the list later must not flap exclusions on and
+// off. Games that aren't five of ours are cheap no-ops every poll; games
+// seen while no list can be computed (fewer than 5 players checked) stay
+// unjudged so a later poll can still catch them.
+function evaluateFearless(games) {
+  const seen = new Set(fearlessEval.map(e => e.id));
+  const fresh = games.filter(g => !seen.has(g.matchId) && g.picks.length === 5);
+  if (fresh.length && D) {
+    let lists = [];
+    fearlessSuppress = true;  // judge against the un-excluded lists
+    candCache = {};
+    try {
+      const base = optimize(RANKED_TOP);
+      if (base && base.length) lists = [...base, ...uniqueList("overall", base)];
+    } finally {
+      fearlessSuppress = false;
+      candCache = {};
+    }
+    if (lists.length) {
+      const key = a => [...a].sort().join(",");
+      const compKeys = new Set(lists.map(r =>
+        key(r.assign.map(x => x.player)) + "#" + key(r.assign.map(x => x.champ))));
+      for (const g of fresh) {
+        const gk = key(g.picks.map(p => p.riotId)) + "#" + key(g.picks.map(p => p.championId));
+        fearlessEval.push({ id: g.matchId, end: g.gameEnd,
+          champs: compKeys.has(gk) ? g.picks.map(p => p.championId) : 0 });
+      }
+    }
+  }
+  const changed = rebuildFearlessChamps();
+  localStorage.setItem("fearlessEval", JSON.stringify(fearlessEval));
+  if (changed) {
+    noteEvent("fearless exclusions updated");
+    draftChanged();
+  }
+}
+
+// Pull our finished flex games from the rolling window and re-judge. Runs on
+// toggle-on, when a champ select opens, and on a slow poll — match-v5 lags a
+// game's end by a minute or two, so any single moment can miss; the poll is
+// the backstop (and what ages exclusions out).
 let fearlessFetching = false;
 async function fetchFearless() {
   if (!fearless || !WORKER_URL || fearlessFetching) return;
   fearlessFetching = true;
   try {
-    const j = await fetch(`${WORKER_URL}/fearless?since=${fearlessSince}`).then(r => r.json());
-    if (Array.isArray(j.games)) {
-      const picks = j.games.flatMap(g => g.picks);
-      if (JSON.stringify(picks) !== JSON.stringify(fearlessPicks)) {
-        fearlessPicks = picks;
-        fearlessChamps = new Set(picks.map(p => p.championId));
-        localStorage.setItem("fearlessPicks", JSON.stringify(picks));
-        noteEvent("fearless exclusions updated");
-        draftChanged();
-      }
-    }
+    const since = Math.floor(Date.now() / 1000) - FEARLESS_WINDOW_S;
+    const j = await fetch(`${WORKER_URL}/fearless?since=${since}`).then(r => r.json());
+    if (Array.isArray(j.games)) evaluateFearless(j.games);
   } catch { /* keep the last-known set; the next poll retries */ }
   fearlessFetching = false;
 }
-setInterval(() => { if (fearless && draftMode && !document.hidden) fetchFearless(); }, 120e3);
+setInterval(() => { if (fearless && !document.hidden) fetchFearless(); }, 120e3);
+
+// One switch, two buttons: the draft card's and the top-comps header's (so a
+// session without draft mode — or the bridge — can still run fearless).
+function toggleFearless() {
+  fearless = !fearless;
+  localStorage.setItem("fearless", fearless ? "1" : "0");
+  if (fearless) {
+    fearlessSince = Math.floor(Date.now() / 1000);
+    localStorage.setItem("fearlessSince", fearlessSince);
+    fetchFearless();  // the rolling window already covers pre-toggle games
+  } else {
+    fearlessSince = 0;
+    fearlessEval = [];
+    fearlessChamps = new Set();
+    localStorage.removeItem("fearlessSince");
+    localStorage.removeItem("fearlessEval");
+  }
+  const hb = $("#fearlessBtn2");
+  if (hb) hb.classList.toggle("active", fearless);
+  draftChanged();
+}
 
 // Sets `included` and keeps the squad checklist checkbox in sync — direct
 // state writes elsewhere would leave the visible list stale.
@@ -2951,7 +3015,7 @@ function renderSlots() {
           stat += `<br><span class="dim">cs/min ${(e.cs / (e.secs / 60)).toFixed(1)}</span>`;
         if (draftUnavailable(s.champ))
           stat += `<br><span class="banned-note">${effBans().has(s.champ) ? "banned!"
-            : effEnemy().has(s.champ) ? "enemy took it!" : "already played this session!"}</span>`;
+            : effEnemy().has(s.champ) ? "enemy took it!" : "in a comp we already played!"}</span>`;
         else {
           const hc = hardCounters(s.champ, role);
           if (hc.length)
@@ -4158,16 +4222,19 @@ function initFlexToggle() {
   initFlexToggle();
   initRoleToggle();
   initDraftToggle();
-  // A fearless session left on overnight is over, not resumable — the worker
-  // refuses a >24h lookback anyway, so expire it instead of erroring forever.
+  // A fearless session left on overnight is over, not resumable — its games
+  // aged out of the rolling window long ago, so stop polling for nothing.
   if (fearless && fearlessSince < Math.floor(Date.now() / 1000) - 24 * 3600) {
     fearless = false;
-    fearlessPicks = [];
+    fearlessEval = [];
     fearlessChamps = new Set();
     localStorage.setItem("fearless", "0");
     localStorage.removeItem("fearlessSince");
-    localStorage.removeItem("fearlessPicks");
-  } else if (fearless) fetchFearless();
+    localStorage.removeItem("fearlessEval");
+  } else if (fearless) {
+    rebuildFearlessChamps();  // cached verdicts cover a reload mid-session
+    fetchFearless();
+  }
   if (liveMode) { initRefreshButton(); doRefresh(true); }
 })();
 </script>
