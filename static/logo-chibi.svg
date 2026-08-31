@@ -50,8 +50,8 @@
 
   <!-- graduation cap, cutely tilted -->
   <g transform="rotate(-9 242 95)">
-    <path d="M 170 76 Q 148 40 184 38 Q 189 68 170 76 Z" fill="#7cab63"/>
-    <path d="M 314 76 Q 336 40 300 38 Q 295 68 314 76 Z" fill="#7cab63"/>
+    <path d="M 170 76 Q 148 40 184 38 Q 189 68 170 76 Z" fill="#d9b380"/>
+    <path d="M 314 76 Q 336 40 300 38 Q 295 68 314 76 Z" fill="#d9b380"/>
     <path d="M 187 122 L 297 122 L 286 154 L 198 154 Z" fill="#232028"/>
     <polygon points="242,40 352,90 242,140 132,90" fill="#2f2b33"/>
     <line x1="242" y1="46" x2="242" y2="118" stroke="#d8a63f" stroke-width="4"/>
