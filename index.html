@@ -138,6 +138,62 @@
   }
   .chip b { color: var(--text-primary); font-weight: 600; }
 
+  /* ---- mascot chat ---- */
+  button.sigil { border: 0; background: none; padding: 0; cursor: pointer; }
+  .sigil img { transition: transform 120ms var(--ease-standard); }
+  .sigil:hover img { transform: scale(1.12); }
+  @keyframes mascot-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+  .sigil.thinking img { animation: mascot-bob 0.9s ease-in-out infinite; }
+  .chat-dock {
+    position: fixed; right: 16px; bottom: 16px; z-index: 60;
+    width: 340px; max-height: min(480px, calc(100vh - 32px));
+    display: flex; flex-direction: column;
+    background: var(--layer-1); border: 1px solid var(--outline-variant);
+    border-radius: var(--radius); box-shadow: var(--elev-lg);
+  }
+  .chat-head {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: var(--sp-3); border-bottom: 1px solid var(--outline-variant);
+  }
+  .chat-head img { width: 28px; height: 28px; }
+  .chat-head b { font-size: 14px; line-height: 18px; }
+  .chat-close {
+    margin-left: auto; border: 0; background: none; cursor: pointer;
+    color: var(--text-muted); font-size: 18px; line-height: 1;
+    padding: 2px 6px; border-radius: 6px;
+  }
+  .chat-close:hover { background: var(--hover-layer); color: var(--text-primary); }
+  .chat-log {
+    flex: 1; overflow-y: auto; min-height: 120px;
+    padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2);
+  }
+  .chat-msg { display: flex; gap: var(--sp-2); align-items: flex-end; }
+  .chat-msg .bubble {
+    padding: 6px 10px; border-radius: 10px; max-width: 85%;
+    font-size: 13px; line-height: 18px;
+    white-space: pre-wrap; overflow-wrap: break-word;
+  }
+  .chat-msg.bot img { width: 22px; height: 22px; flex: none; }
+  .chat-msg.bot .bubble { background: var(--layer-2); border-bottom-left-radius: 3px; }
+  .chat-msg.bot.streaming img { animation: mascot-bob 0.9s ease-in-out infinite; }
+  .chat-msg.user { justify-content: flex-end; }
+  .chat-msg.user .bubble { background: var(--accent-dim); border-bottom-right-radius: 3px; }
+  .chat-form {
+    display: flex; gap: var(--sp-2);
+    padding: var(--sp-3); border-top: 1px solid var(--outline-variant);
+  }
+  .chat-form input {
+    flex: 1; min-width: 0; font: inherit; font-size: 13px;
+    color: var(--text-primary); background: var(--layer-2);
+    border: 1px solid var(--outline-variant); border-radius: 8px; padding: 6px 10px;
+  }
+  @media (max-width: 600px) {
+    .chat-dock { left: 8px; right: 8px; bottom: 8px; width: auto; }
+  }
+
   /* ---- layout ---- */
   .layout { display: grid; grid-template-columns: 370px 1fr; gap: var(--sp-6); align-items: start; }
   /* grid children default to min-width:auto and refuse to shrink below their
@@ -1030,9 +1086,9 @@
 <body>
 <div class="shell">
   <header>
-    <div class="sigil">
+    <button class="sigil" id="mascotBtn" title="Chat with Compy" aria-label="Chat with Compy">
       <img src="static/logo-chibi.svg" alt="Comp Builder mascot">
-    </div>
+    </button>
     <div>
       <h1>Comp Builder</h1>
     </div>
@@ -1044,6 +1100,19 @@
     <button id="themeToggle" class="btn toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">◐</button>
   </header>
   <main id="app"></main>
+</div>
+
+<div class="chat-dock" id="chatDock" hidden>
+  <div class="chat-head">
+    <img src="static/logo-chibi.svg" alt="">
+    <div><b>Compy</b></div>
+    <button class="chat-close" id="chatClose" aria-label="Close chat">×</button>
+  </div>
+  <div class="chat-log" id="chatLog" aria-live="polite"></div>
+  <form class="chat-form" id="chatForm">
+    <input id="chatInput" placeholder="Ask about the group…" autocomplete="off" maxlength="500" aria-label="Message Compy">
+    <button class="btn" type="submit">Send</button>
+  </form>
 </div>
 
 <script>
@@ -3982,6 +4051,118 @@ function applyComp(r) {
   renderSlots(); renderScore();
 }
 
+// --- mascot chat ---------------------------------------------------------
+// The header mascot opens a small dock; questions go to the worker's POST
+// /chat (Workers AI over a server-built digest of the group's data) and
+// stream back into a speech bubble while the mascot bobs. History is
+// session-only and capped — the worker attaches the data context itself.
+const chatHistory = [];
+let chatBusy = false;
+
+function chatBubble(role, text) {
+  const log = $("#chatLog");
+  const row = document.createElement("div");
+  row.className = "chat-msg " + role;
+  if (role === "bot") {
+    const img = document.createElement("img");
+    img.src = "static/logo-chibi.svg"; img.alt = "";
+    row.appendChild(img);
+  }
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  row.appendChild(bubble);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+  return { row, bubble };
+}
+
+// The model sometimes bolds names despite being told plain text — render
+// that one construct instead of showing literal asterisks. Everything is
+// HTML-escaped first, so the reply can't inject markup.
+function mascotHTML(text) {
+  return text.replace(/[&<>]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+
+async function askMascot(text) {
+  chatBusy = true;
+  chatBubble("user", text);
+  chatHistory.push({ role: "user", content: text });
+  const log = $("#chatLog");
+  const { row, bubble } = chatBubble("bot", "…");
+  row.classList.add("streaming");
+  $("#mascotBtn").classList.add("thinking");
+  let reply = "";
+  try {
+    const r = await fetch(WORKER_URL + "/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: chatHistory.slice(-12) }),
+    });
+    if (!r.ok || !r.body)
+      throw new Error((await r.json().catch(() => ({}))).error || "chat " + r.status);
+    // Workers AI SSE: `data: {"response":"token"}` lines, then `data: [DONE]`.
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();  // keep any partial line for the next chunk
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          // numeric tokens arrive as bare JSON numbers — 0 is still a token
+          const tok = JSON.parse(payload).response;
+          if (tok !== undefined && tok !== null && tok !== "") {
+            reply += tok;
+            bubble.innerHTML = mascotHTML(reply);
+            log.scrollTop = log.scrollHeight;
+          }
+        } catch { /* split JSON line; completed by the next chunk */ }
+      }
+    }
+    if (!reply) throw new Error("empty reply");
+    chatHistory.push({ role: "assistant", content: reply });
+  } catch {
+    if (!reply) bubble.textContent =
+      "The worker hung up on me. N-not that I cared about your question — try again in a moment.";
+  } finally {
+    row.classList.remove("streaming");
+    $("#mascotBtn").classList.remove("thinking");
+    chatBusy = false;
+  }
+}
+
+function initMascotChat() {
+  const dock = $("#chatDock"), input = $("#chatInput");
+  $("#mascotBtn").addEventListener("click", () => {
+    dock.hidden = !dock.hidden;
+    if (dock.hidden) return;
+    if (!$("#chatLog").children.length)
+      chatBubble("bot", liveMode
+        ? "W-what do you want? …Fine. Ask about the group — records, duos, comps, whatever. It's not like I've memorized all your stats or anything."
+        : "Hmph. The worker's unreachable, so I couldn't answer you even if I wanted to. Which I don't. (Try again when it's back.)");
+    input.focus();
+  });
+  $("#chatClose").addEventListener("click", () => { dock.hidden = true; });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); $("#chatForm").requestSubmit(); }
+  });
+  $("#chatForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || chatBusy || !liveMode) return;
+    input.value = "";
+    askMascot(text);
+  });
+}
+
 // --- boot ----------------------------------------------------------------
 // Deployed Cloudflare Worker origin (e.g. "https://comp-builder-api.you.workers.dev").
 // When set, data loads live from the worker and the Refresh button appears;
@@ -4219,6 +4400,7 @@ function initFlexToggle() {
   RAW = data;
   applyCurrent();
   initThemeToggle();
+  initMascotChat();
   initFlexToggle();
   initRoleToggle();
   initDraftToggle();

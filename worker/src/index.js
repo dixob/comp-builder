@@ -19,6 +19,8 @@
 //                     records from OP.GG, KV-cached for a day
 //   GET  /fearless -> ?since=<epoch seconds> flex games our players finished
 //                     since then, for fearless-session champ exclusions
+//   POST /chat     -> mascot chatbot: {messages:[{role,content}...]} answered
+//                     by Workers AI over a digest of the group's data (SSE)
 //   cron           -> refresh OP.GG meta + Data Dragon champion names daily
 //
 // Free-tier budget per /refresh: 9 match-id calls + <=MAX_NEW_MATCHES match
@@ -501,6 +503,128 @@ async function fearless(env, url) {
   return json({ since, games });
 }
 
+// --- mascot chat ----------------------------------------------------------
+
+// Workers AI (free daily allocation) answers questions over the group's data.
+// The full /data payload is far too big for a model prompt, so we serve a
+// compact plaintext digest instead — rebuilt at most every DIGEST_TTL from KV
+// "data" and cached, since parsing the ~1 MB payload is the expensive part.
+const CHAT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DIGEST_TTL = 10 * 60;       // seconds; chat can lag /refresh this much
+const CHAT_MAX_MSGS = 12;         // history window the client may send
+const CHAT_MAX_MSG_CHARS = 1000;
+
+const CHAT_SYSTEM = `You are Compy, the Comp Builder mascot — a chibi guide for a group of League of Legends friends who use this app to plan 5-stack flex comps. Personality: full tsundere. You act sassy, unimpressed, and mildly annoyed at being asked ("it's not like I wanted to help you or anything…", "hmph"), you tease the group about their bad win rates — but you secretly adore them, so you ALWAYS come through with a genuinely useful, accurate answer, and the affection slips out despite yourself. Keep the teasing playful, never actually hurtful. Answer using ONLY the data below. Be concise (a short paragraph at most) and concrete with numbers. WR means win rate, g means games. Small samples (under ~10 games) deserve a caveat. If the data doesn't cover a question, admit it — begrudgingly — instead of guessing. Reply in plain text: no markdown, no asterisks, no roleplay action text.`;
+
+const wr = (wins, games) => games ? Math.round((100 * wins) / games) + "%" : "?";
+const ROLE_SHORT = { TOP: "top", JUNGLE: "jg", MIDDLE: "mid", BOTTOM: "bot",
+  UTILITY: "sup", MID: "mid", ADC: "bot", SUPPORT: "sup" };
+
+function buildChatDigest(data) {
+  const P = data.players;
+  const nameOf = id => (P.champions[id] && P.champions[id].name) || `champ#${id}`;
+  const out = [];
+  out.push(`GROUP DATA (patch ${P.ddragonVersion}, refreshed ${P.generatedAt.slice(0, 16)}Z)`);
+
+  const played = new Set(); // champ ids the group actually plays, for meta/profile lines
+  out.push("", "ROSTER (season W-L; champs: games, WR, KDA, roles):");
+  for (const p of P.players) {
+    const ranks = p.ranks || {};
+    const rank = ["420", "440"].map(q => {
+      const r = ranks[q];
+      return r ? `${q === "420" ? "solo" : "flex"} ${r.tier} ${r.division} ${r.wins}W-${r.losses}L` : null;
+    }).filter(Boolean).join(", ") || "unranked";
+    const recent = (p.recent || []).slice(0, 10);
+    const rw = recent.filter(g => g.win).length;
+    out.push(`* ${p.riotId} — ${rank}` +
+      (recent.length ? `; last ${recent.length}: ${rw}W-${recent.length - rw}L` : ""));
+    for (const c of p.champions.slice(0, 12)) {
+      if (c.games >= 3) played.add(c.championId);
+      const kda = c.d ? ((c.k + c.a) / c.d).toFixed(1) : "perfect";
+      const roles = Object.entries(c.roles).sort((a, b) => b[1].games - a[1].games)
+        .slice(0, 2).map(([r, s]) => `${ROLE_SHORT[r] || r} ${s.games}g ${wr(s.wins, s.games)}`).join(", ");
+      out.push(`  - ${nameOf(c.championId)}: ${c.games}g ${wr(c.wins, c.games)} ${kda}kda (${roles})`);
+    }
+  }
+
+  out.push("", "DUOS (two tracked players on the same team):");
+  for (const pp of [...P.playerPairs].sort((a, b) => b.games - a.games))
+    out.push(`* ${pp.a} + ${pp.b}: ${pp.games}g ${wr(pp.wins, pp.games)}`);
+
+  out.push("", "CHAMP-PAIR SYNERGY (these players piloting these champs together):");
+  for (const cp of [...P.championPairs].filter(c => c.games >= 3)
+    .sort((a, b) => b.games - a.games).slice(0, 40))
+    out.push(`* ${cp.pa} ${nameOf(cp.a)} + ${cp.pb} ${nameOf(cp.b)}: ${cp.games}g ${wr(cp.wins, cp.games)}`);
+
+  const stacks = (P.stacks || []).slice(0, 8);
+  if (stacks.length) {
+    out.push("", "RECENT FULL 5-STACK GAMES (newest first):");
+    for (const s of stacks) {
+      const us = s.us.map(r => `${r.rid.split("#")[0]} ${nameOf(r.champ)}`).join(", ");
+      const them = s.them.map(r => nameOf(r.champ)).join("/");
+      out.push(`* ${new Date(s.ts).toISOString().slice(0, 10)} ${s.win ? "WIN" : "LOSS"} ` +
+        `${Math.round(s.secs / 60)}min: [${us}] vs [${them}]`);
+    }
+  }
+
+  if (data.meta && data.meta.champions) {
+    out.push("", `CURRENT META, patch ${data.meta.patch} (champs the group plays; WR, tier 1=best):`);
+    for (const cid of [...played].sort((a, b) => a - b)) {
+      const m = data.meta.champions[cid];
+      if (!m) continue;
+      const pos = Object.entries(m.positions || {})
+        .map(([r, s]) => `${ROLE_SHORT[r] || r} ${(s.winRate * 100).toFixed(1)}%`).join(", ");
+      out.push(`* ${nameOf(cid)}: tier ${m.tier ?? "?"} (${pos})`);
+    }
+  }
+
+  if (data.profiles && data.profiles.champions) {
+    const rows = [...played].sort((a, b) => a - b).map(cid => {
+      const pr = data.profiles.champions[cid];
+      if (!pr) return null;
+      const kind = pr.physShare >= 0.6 ? "AD" : pr.magicShare >= 0.6 ? "AP" : "mixed";
+      const tags = [kind, pr.tankPct >= 0.75 ? "tanky" : null,
+        pr.ccPct >= 0.75 ? "high CC" : null, pr.shieldPct >= 0.85 ? "shields/heals" : null];
+      return `${nameOf(cid)} ${tags.filter(Boolean).join(" ")}`;
+    }).filter(Boolean);
+    out.push("", "DAMAGE PROFILES: " + rows.join("; "));
+  }
+
+  return out.join("\n");
+}
+
+async function chat(env, req) {
+  if (!env.AI) return json({ error: "AI binding not configured" }, 503);
+  const body = await req.json().catch(() => null);
+  const msgs = body && Array.isArray(body.messages)
+    ? body.messages.slice(-CHAT_MAX_MSGS) : null;
+  if (!msgs || !msgs.length) return json({ error: "messages required" }, 400);
+  for (const m of msgs)
+    if (!m || (m.role !== "user" && m.role !== "assistant")
+      || typeof m.content !== "string" || !m.content.trim()
+      || m.content.length > CHAT_MAX_MSG_CHARS)
+      return json({ error: "bad message" }, 400);
+
+  let digest = await env.KV.get("chatdigest");
+  if (!digest) {
+    const data = await env.KV.get("data", "json");
+    if (!data) return json({ error: "not seeded" }, 503);
+    digest = buildChatDigest(data);
+    await env.KV.put("chatdigest", digest, { expirationTtl: DIGEST_TTL });
+  }
+
+  // Workers AI streams SSE bytes (`data: {"response":"..."}` lines) — pass
+  // them straight through; the page parses them incrementally.
+  const stream = await env.AI.run(CHAT_MODEL, {
+    messages: [{ role: "system", content: `${CHAT_SYSTEM}\n\n${digest}` }, ...msgs],
+    stream: true,
+    max_tokens: 600,
+  });
+  return new Response(stream, {
+    headers: { "content-type": "text/event-stream", "cache-control": "no-store", ...CORS },
+  });
+}
+
 // --- cron: meta + champion names ------------------------------------------
 
 async function refreshMeta(env) {
@@ -559,6 +683,7 @@ export default {
           "content-type": "application/json", "cache-control": "no-store", ...CORS } });
       }
       if (url.pathname === "/refresh" && req.method === "POST") return refresh(env);
+      if (url.pathname === "/chat" && req.method === "POST") return chat(env, req);
       if (url.pathname === "/counters") return counters(env, url);
       if (url.pathname === "/fearless") return fearless(env, url);
       if (url.pathname === "/draft" || url.pathname === "/draft/ws") {

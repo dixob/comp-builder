@@ -6,6 +6,10 @@ compatibility_date = "2026-08-01"
 [triggers]
 crons = ["0 9 * * *"]
 
+# Workers AI (free daily allocation) powers the mascot chat (POST /chat).
+[ai]
+binding = "AI"
+
 # Create with: npx wrangler kv namespace create KV
 # then paste the id it prints here.
 [[kv_namespaces]]
