@@ -154,6 +154,17 @@
     background: var(--layer-1); border: 1px solid var(--outline-variant);
     border-radius: var(--radius); box-shadow: var(--elev-lg);
   }
+  /* the explicit displays above would otherwise override [hidden] */
+  .chat-dock[hidden], .chat-fab[hidden] { display: none; }
+  .chat-fab {
+    position: fixed; right: 16px; bottom: 16px; z-index: 60;
+    width: 48px; height: 48px; border-radius: 50%;
+    display: grid; place-items: center; cursor: pointer;
+    background: var(--layer-1); border: 1px solid var(--outline-variant);
+    box-shadow: var(--elev-md);
+  }
+  .chat-fab img { width: 30px; height: 30px; transition: transform 120ms var(--ease-standard); }
+  .chat-fab:hover img { transform: scale(1.15); }
   .chat-head {
     display: flex; align-items: center; gap: var(--sp-2);
     padding: var(--sp-3); border-bottom: 1px solid var(--outline-variant);
@@ -1102,6 +1113,9 @@
   <main id="app"></main>
 </div>
 
+<button class="chat-fab" id="chatFab" title="Chat with Compy" aria-label="Chat with Compy">
+  <img src="static/logo-chibi.svg" alt="">
+</button>
 <div class="chat-dock" id="chatDock" hidden>
   <div class="chat-head">
     <img src="static/logo-chibi.svg" alt="">
@@ -4140,19 +4154,23 @@ async function askMascot(text) {
 }
 
 function initMascotChat() {
-  const dock = $("#chatDock"), input = $("#chatInput");
-  $("#mascotBtn").addEventListener("click", () => {
-    dock.hidden = !dock.hidden;
-    if (dock.hidden) return;
+  const dock = $("#chatDock"), fab = $("#chatFab"), input = $("#chatInput");
+  const setOpen = open => {
+    dock.hidden = !open;
+    fab.hidden = open;  // the corner bubble stands in for the closed dock
+    if (!open) return;
     if (!$("#chatLog").children.length)
       chatBubble("bot", liveMode
         ? "W-what do you want? …Fine. Ask about the group — records, duos, comps, whatever. It's not like I've memorized all your stats or anything."
         : "Hmph. The worker's unreachable, so I couldn't answer you even if I wanted to. Which I don't. (Try again when it's back.)");
     input.focus();
-  });
-  $("#chatClose").addEventListener("click", () => { dock.hidden = true; });
+  };
+  $("#mascotBtn").addEventListener("click", () => setOpen(dock.hidden));
+  fab.addEventListener("click", () => setOpen(true));
+  $("#chatClose").addEventListener("click", () => setOpen(false));
   input.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); $("#chatForm").requestSubmit(); }
+    if (e.key === "Escape") setOpen(false);
   });
   $("#chatForm").addEventListener("submit", e => {
     e.preventDefault();
