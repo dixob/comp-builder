@@ -4,7 +4,7 @@
   "testFrom": "2027-02-01T00:00:00Z",
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
-  "modelVersion": "2026-11-24.4",
+  "modelVersion": "2026-11-24.5",
   "capturePolicy": "server-standard-v1",
   "comparisonScores": ["current", "legacyPairSynergy", "halfLegacyPairSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",

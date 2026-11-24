@@ -4,13 +4,17 @@ Compy ranks candidate compositions with a **score out of 100**. It does not
 estimate a calibrated match-win probability. Historical player and meta win
 rates remain percentages; score adjustments are displayed as points.
 
-The current model is `2026-11-24.4`, implemented in the scoring section of
+The current model is `2026-11-24.5`, implemented in the scoring section of
 [index.html](index.html). The [review](SCORING_REVIEW.md) records the original
 audit; [EVALUATION.md](EVALUATION.md) explains how to test predictions against
 future outcomes. The current coefficients are conservative heuristics, not
 learned or validated accuracy improvements.
 
-Version `.4` searches every eligible manual pick and removes additive shared-win
+Version `.5` requires role evidence by default in both manual selection and
+optimization. Unsupported roles require the visible **Allow unproven roles**
+opt-in. Scores and the removal of pair bonuses are unchanged from `.4`.
+
+Version `.4` searched every eligible manual pick and removed additive shared-win
 pair bonuses. Those matches already affect personal records; summing their ten
 champion pairs and ten player pairs counted correlated success again. The prior
 pair model is retained only as a prospective comparison, not as score points.
@@ -71,8 +75,8 @@ The prior is OP.GG's current-patch NA Emerald+ Solo/Duo champion win rate in
 the assigned role when at least 100 meta games are available. Missing role
 coverage falls back to the champion's overall win rate; missing champion data
 falls back to 50%. No extra penalty is applied merely because the source omits
-a lane. Cards label each fallback. Role viability is a descriptive picker
-label, not an eligibility filter.
+a lane. Cards label each fallback. Role evidence is a separate, explicit eligibility
+filter; an overall-meta fallback does not establish that a role is supported.
 
 Both local fetch and worker explicitly request the configured tier, defaulting
 to `emerald_plus`. Exact `emerald` is a different population. Flex-only changes
@@ -171,11 +175,20 @@ filters. Manual selection, full search, assigned-role search, worst search and
 single-swap recommendations share the same pool: the union of every champion
 in the player's history and mastery data, filtered by the active constraints.
 There is no eight-pick cap, 15-pick comparison cap, mastery-list cutoff, or
-minimum-sample/role-viability preference that hides otherwise eligible choices.
+five-game preference that hides otherwise eligible choices.
 
-Role viability labels picks with a personal role sample of at least ten games
-or a meta role with at least 100 games and 10% role share. Low-sample and off-meta
-choices remain searchable; scores still reflect their evidence and role penalty.
+By default, picks require either at least ten personal games on that champion in
+that role, or meta coverage in that role with at least 100 games and 10% role
+share. This reuses the existing role-support thresholds as a visible shared
+eligibility rule; it is not a calibrated accuracy threshold. A three-game Leona
+support record can qualify through meta coverage, while a Thresh support record
+alone does not qualify Thresh top.
+
+**Allow unproven roles** defaults off and applies to both the picker and every
+search. Enabling it permits unsupported roles within the other filters. Those
+picks show an exploratory warning. No-repeat searches may return fewer rows
+when supported choices run out; they never silently relax the role requirement.
+Missing meta requires personal role evidence or the same explicit opt-in.
 A selected pick outside current filters stays visible as a disabled option with
 a warning. Explicit draft locks preserve that already-selected pick unless it
 is unavailable or explicitly avoided; locks do not silently change filters.

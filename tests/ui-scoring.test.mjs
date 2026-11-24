@@ -41,7 +41,7 @@ test('matchup expectation is neutral for equal champions and symmetric for actua
 test('local prospective records capture chosen comp and pregame ablations without outcomes',()=>{
  const c=context();run(c,`slots=D.players.slice(0,5).map(p=>({player:p.riotId,champ:null}));`);
  const record=run(c,`predictionRecord(optimizeChamps(1)[0].assign)`);
- assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.4');
+ assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.5');
  assert(!('outcome'in record));assert(!('win'in record));assert.equal(record.scores.noMastery,record.scores.current);
  for(const value of Object.values(record.scores))assert(value>=.05&&value<=.95);
  assert(record.comp.every(p=>p.puuid&&p.puuidHistory.includes(p.puuid)));
@@ -257,7 +257,8 @@ test('manual picker and optimizer expose the same complete filtered pool',()=>{
  c.document.querySelectorAll=()=>[];
  run(c,'renderRift=()=>{};');
  let lowSample=0,offMeta=0,masteryBeyondTwelve=0;
- for(const p of players.players){
+ for(const allow of [false,true])for(const p of players.players){
+  run(c,`allowUnprovenRoles=${allow};candCache={};`);
   c.playerId=p.riotId;
   run(c,'slots=ROLES.map(()=>({player:playerId,champ:null}));renderSlots();');
   const selects=[...container.innerHTML.matchAll(/<select[^>]*data-kind="champ"[^>]*>([\s\S]*?)<\/select>/g)];
@@ -267,8 +268,13 @@ test('manual picker and optimizer expose the same complete filtered pool',()=>{
    const eligible=Array.from(run(c,`candidates(playerId,ROLES[${i}])`)).sort((a,b)=>a-b);
    assert.deepEqual(shown,eligible);
    const expected=[...new Set([...p.champions.map(ch=>ch.championId),...p.mastery.map(m=>m.championId)])]
-    .filter(cid=>(p.mastery.find(m=>m.championId===cid)?.points||0)>=30000).sort((a,b)=>a-b);
-   assert.deepEqual(shown,expected,'No hidden sample tier, viability tier or cap');
+    .filter(cid=>{
+     const entry=p.champions.find(ch=>ch.championId===cid),role=['TOP','JUNGLE','MIDDLE','BOTTOM','UTILITY'][i];
+     const pos=meta.champions[cid]?.positions?.[['TOP','JUNGLE','MID','ADC','SUPPORT'][i]];
+     const supported=(entry?.roles?.[role]?.games||0)>=10||(pos?.games>=100&&pos?.roleRate>=.10);
+     return (p.mastery.find(m=>m.championId===cid)?.points||0)>=30000&&(allow||supported);
+    }).sort((a,b)=>a-b);
+   assert.deepEqual(shown,expected,'Only the visible role-evidence rule and filters restrict the shared pool');
    for(const cid of shown){
     const ch=p.champions.find(ch=>ch.championId===cid);
     if((ch?.games||0)<5)lowSample++;
@@ -278,6 +284,65 @@ test('manual picker and optimizer expose the same complete filtered pool',()=>{
   }
  }
  assert(lowSample>0&&offMeta>0&&masteryBeyondTwelve>0);
+});
+
+test('SecondComing Xerath and Thresh top require an explicit unproven-role opt-in',()=>{
+ const c=context();
+ assert.equal(run(c,'allowUnprovenRoles'),false);
+ // The checked-in snapshot predates Xerath crossing the default mastery floor.
+ run(c,'masteryMin=0;candCache={};');
+ for(const strict of [false,true])for(const flex of [false,true]){
+  run(c,`D=${flex?'flexView(players)':'players'};strictRole=${strict};indCache={};candCache={};
+   for(const key of Object.keys(roleShareCache))delete roleShareCache[key];`);
+  for(const cid of [101,412]){
+   assert.equal(run(c,`pickEvidence('SecondComing#him',${cid},'TOP').roleGames`),0);
+   assert.equal(run(c,`pickEvidence('SecondComing#him',${cid},'TOP').roleSupported`),false);
+   assert.equal(run(c,`candidates('SecondComing#him','TOP').includes(${cid})`),false);
+  }
+  assert(run(c,`candidates('SecondComing#him','TOP').includes(86)`),'Garen top remains eligible');
+  assert(run(c,`candidates('SecondComing#him','UTILITY').includes(412)`),'Thresh support remains eligible');
+ }
+ // The former five-game tier must not return: a real three-game Leona support
+ // record is eligible because the role itself has qualifying meta coverage.
+ run(c,'D=players;strictRole=false;indCache={};candCache={};');
+ assert.equal(run(c,`D.players.find(p=>p.riotId==='Bimbobap#NA1').champions.find(ch=>ch.championId===89).games`),3);
+ assert(run(c,`candidates('Bimbobap#NA1','UTILITY').includes(89)`));
+ run(c,'allowUnprovenRoles=true;candCache={};');
+ for(const cid of [101,412])assert(run(c,`candidates('SecondComing#him','TOP').includes(${cid})`));
+ assert.match(run(c,`evidenceHTML(pickEvidence('SecondComing#him',412,'TOP'))`),/Unproven role/);
+ assert.match(run(c,`roleEligibilityControl('')`),/aria-pressed="true"/);
+ run(c,'allowUnprovenRoles=false;candCache={};');
+ assert(!run(c,`candidates('SecondComing#him','TOP').includes(412)`));
+});
+
+test('normal and no-repeat lists never silently fall back to unsupported roles',()=>{
+ const c=context();setRecordedBoard(c);
+ for(const mode of ['overall','assigned','worst']){
+  const expression=mode==='overall'?'optimize(10)':mode==='assigned'?'optimizeChamps(10)':'optimizeWorst(10)';
+  c.results=run(c,expression);assert(c.results.length>0);
+  c.rows=run(c,`[...results,...uniqueList('${mode}',results)]`);
+  assert(run(c,`rows.every(r=>r.assign.every(a=>pickEvidence(a.player,a.champ,a.role).roleSupported))`));
+ }
+ // Exhaust the observed supported picks, as the no-repeat filter does. Empty
+ // is correct; do not fill the list with unsupported champions to reach ten.
+ run(c,`for(const p of D.players)for(const role of ROLES)for(const cid of candidates(p.riotId,role))uniqueExclude.add(p.riotId+'|'+cid);
+  candCache={};renderTabs=()=>{};switchTab('overall');`);
+ assert.equal(run(c,'rankedTabs.overall.length'),0);
+ assert.match(run(c,'emptyPoolMessage()'),/Allow unproven roles/);
+});
+
+test('automatic evaluation still records actual unsupported draft picks',()=>{
+ const c=context();setRecordedBoard(c);
+ run(c,`board=[{player:'SecondComing#him',champ:412,role:'TOP'},
+   ...board.filter(a=>a.player!=='SecondComing#him').map((a,i)=>({...a,role:ROLES[i+1]}))].slice(0,5);`);
+ // Obtain an actual-player composition around an explicit experimental lock.
+ run(c,`slots=board.map(a=>({player:a.player,champ:a.champ}));board=optimizeChamps(1,{TOP:412})[0].assign;
+  draft={ours:board.map(a=>({riotId:a.player,position:a.role,championId:a.champ})),enemy:[],bans:[]};`);
+ const record=createScorer(players,meta,run(c,'draft')).record({},new Date().toISOString());
+ assert.equal(record.settings.allowUnprovenRoles,false);
+ assert.equal(record.comp[0].championId,412);
+ assert.equal(record.evidence[0].roleSupported,false);
+ assert.equal(record.modelVersion,'2026-11-24.5');
 });
 
 test('repeated pair aggregates cannot change production scores or optimized picks',()=>{

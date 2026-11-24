@@ -4,7 +4,8 @@ Team composition optimizer for a fixed group of League of Legends players.
 It combines personal champion/role records with a current-patch role-meta prior,
 role comfort, and available draft matchup evidence. Mastery and role-game filters
 control eligibility. The optimizer and manual picker use the same complete pool,
-including low-sample and off-meta picks.
+including low-sample picks with role support. Unsupported roles require the
+shared **Allow unproven roles** opt-in, which defaults off.
 
 Shared matches already contribute to personal records. Additional champion-pair
 and player-pair win-rate bonuses are excluded from production scoring to avoid
@@ -18,10 +19,10 @@ A **Team profile** panel also reads the comp's shape — damage mix
 combat averages over the cached matches (`compute_profiles.py`). It's
 advisory only and never feeds the composition score.
 
-Champions are only pickable where they make sense: the player must actually
-play the champ in that role (or the meta must), and a mastery floor filters
-out one-game wonders. Role comfort (share of a player's games in each role)
-is scored too.
+Default recommendations require ten personal games in the role or qualifying
+role-meta coverage (100 games and 10% role share). Mastery and role-game ranges
+still apply. Experimental roles remain available through the explicit opt-in;
+manual picks and the optimizer always share the same eligibility rules.
 
 **[Open the app](https://dixob.github.io/comp-builder/)** — pick who plays
 which role and let it optimize the champions, or let it optimize the full

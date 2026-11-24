@@ -21,7 +21,9 @@ abandoned. Computation time and the player/meta source timestamps are retained.
 
 The `server-standard-v1` policy uses all ranked history (`flexOnly: false`),
 standard role weighting (`strictRole: false`) and the website's default candidate
-filters. Actual client picks are scored even when those defaults would not
+filters, including `allowUnprovenRoles: false` since model `.5`. The saved
+`roleSupported` evidence flag distinguishes unsupported picks. Actual client
+picks are scored even when those defaults would not
 recommend them. Freeze this policy in collection notes; do not mix it with old
 browser records or different settings when evaluating one configuration.
 
@@ -127,7 +129,7 @@ file for that collection period.
   "testFrom": "2027-02-01T00:00:00Z",
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
-  "modelVersion": "2026-11-24.4",
+  "modelVersion": "2026-11-24.5",
   "capturePolicy": "server-standard-v1",
   "comparisonScores": ["current", "legacyPairSynergy", "halfLegacyPairSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",
@@ -226,7 +228,7 @@ Current background records include `current`, `previous`, `metaOnly`,
 `noMatchup`, `noRolePenalty`, `noChampionSynergy`, `noPlayerSynergy`,
 `priorK20`, `priorK40`, `synergyHalf`, `legacyPairSynergy`,
 `halfLegacyPairSynergy`, `legacyChampionOnly`, and `legacyPlayerOnly`.
-Version `.4` excludes pair bonuses from production. Its `noSynergy`,
+Versions `.4` and later exclude pair bonuses from production. Their `noSynergy`,
 `noChampionSynergy`, `noPlayerSynergy` and `synergyHalf` compatibility variants
 equal `current`; use the legacy variants to test additive pair bonuses.
 The raw old pair sums are saved separately as `legacyPairAdjustments`. The saved scores must be generated at
@@ -247,7 +249,7 @@ period, with one observed outcome per match. It learns contributions from
 personal, meta and player records, role comfort, role penalty, matchup residual,
 champion synergy and player synergy. This tests whether the existing signals
 help predict outcomes without treating ten pair records as ten independent
-wins. Version `.4` records zero production pair components, so this fit cannot
+wins. Versions `.4` and later record zero production pair components, so this fit cannot
 learn pair effects from that cohort; the frozen legacy score variants provide
 the direct old-versus-new comparison. It is not a hierarchical player model and does not infer unavailable
 opponent skill.

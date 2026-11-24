@@ -1156,7 +1156,7 @@ const OFF_ROLE_GAME_WEIGHT_STRICT = 0.15;
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const ROLE_COMFORT_PRIOR = 20;     // shrink role share for small histories
 const SEARCH_CANDIDATES = Infinity; // all eligible manual picks; no search cutoff
-const MODEL_VERSION = "2026-11-24.4";
+const MODEL_VERSION = "2026-11-24.5";
 const MIN_CHAMP_GAMES = 5;           // profile evidence label only; never a search filter
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
@@ -1192,6 +1192,9 @@ const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= ma
 // Strict role WRs emphasize in-role evidence; off-role games still contribute
 // at OFF_ROLE_GAME_WEIGHT_STRICT. Eligibility is unchanged.
 let strictRole = localStorage.getItem("strictRole") === "1";
+// Shared, visible eligibility rule. Missing role evidence is not evidence that
+// results from another lane transfer. Experimental roles require an opt-in.
+let allowUnprovenRoles = localStorage.getItem("allowUnprovenRoles") === "1";
 
 // --- draft mode ------------------------------------------------------------
 // Bans and enemy picks (entered manually or streamed from lcu_bridge.py via
@@ -1498,7 +1501,7 @@ function masteryBonus(riotId, champId) {
 function roleShare(champEntry, role) {
   if (!champEntry) return 0;
   const total = Object.values(champEntry.roles).reduce((a, r) => a + r.games, 0) || 1;
-  return (champEntry.roles[role] || { games: 0 }).games / total;
+  return (champEntry.roles?.[role] || { games: 0 }).games / total;
 }
 
 // Score of one player playing one champion in one role. The record is the
@@ -1577,19 +1580,19 @@ function compScore(assign) {
   return {total:Math.max(.05,Math.min(.95,rawTotal)),rawTotal,ind,syn,champSyn:0,playerSyn:0};
 }
 
-// Label established role picks separately in the picker. This does not filter
-// eligibility: off-meta choices remain available to the same optimizer.
+// Default role eligibility requires personal experience here or meaningful
+// role-meta coverage. The same rule applies to manual and optimized choices.
 function roleViable(champEntry, champId, role) {
-  if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= OWN_ROLE_VIABLE_GAMES) return true;
-  const m = META && META.champions[champId];
-  const pos = m && m.positions[OPGG_POS[role]];
+  if (champEntry && (champEntry.roles?.[role] || { games: 0 }).games >= OWN_ROLE_VIABLE_GAMES) return true;
+  const m = META?.champions?.[champId];
+  const pos = m?.positions?.[OPGG_POS[role]];
   // 10%: flex picks (Yasuo bot, mage supports) hover in the 10-15% band and
   // are real drafts; below that a lane assignment is usually a fill/troll tag.
   return !!(pos && pos.games >= 100 && pos.roleRate >= 0.10);
 }
 
 // One eligible pool for the manual picker, recommendations and every search.
-// Role viability and sample size are labels, never hidden exclusion tiers.
+// Role evidence is an explicit shared filter, never a tier or candidate cap.
 function candidates(riotId, role, n = SEARCH_CANDIDATES) {
   const ck=riotId+'|'+role+'|'+n;
   if(ck in candCache)return candCache[ck];
@@ -1599,6 +1602,7 @@ function candidates(riotId, role, n = SEARCH_CANDIDATES) {
   for(const m of p.mastery)if(!pool.has(m.championId))pool.set(m.championId,null);
   const eligible=[...pool].filter(([cid,entry])=>
     inMasteryRange(masteryIdx[riotId]?.[cid]||0) && inGamesRange(roleGames(entry,role)) &&
+    (allowUnprovenRoles || roleViable(entry,cid,role)) &&
     !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid,role) &&
     !uniqueExclude.has(riotId+'|'+cid));
   eligible.sort(([a,ea],[b,eb])=>slotScore(riotId,b,role)-slotScore(riotId,a,role)
@@ -1665,7 +1669,7 @@ function pickEvidence(riotId, champId, role) {
   const w = rec.wins + ((entry?.wins || 0) - rec.wins) * offW;
   const playerGames = p.champions.reduce((sum,c)=>sum+c.games,0);
   const playerWins = p.champions.reduce((sum,c)=>sum+c.wins,0);
-  return {riotId,championId:champId,role,roleGames:rec.games,roleWins:rec.wins,
+  return {riotId,championId:champId,role,roleSupported:roleViable(entry,champId,role),roleGames:rec.games,roleWins:rec.wins,
     effectiveGames:g,effectiveWins:w,playerGames,playerWins,prior:metaWR(champId,role),priorWeight:K_IND/(g+K_IND),
     priorSource:priorSource(champId,role),
     source:metaSource(champId,role),shrunkPersonal:shrunk(w,g,K_IND,metaWR(champId,role)),
@@ -1677,6 +1681,7 @@ function evidenceHTML(e) {
   const sample = e.roleGames < 5 ? "Limited role evidence" : e.roleGames < 20 ? "Some role evidence" : "Larger role sample";
   const points = n => `${n>=0?"+":""}${(n*100).toFixed(1)} pts`;
   return `<details style="margin-top:8px"><summary>Why this pick · ${sample}</summary>
+    ${e.roleSupported?"":'<div class="banned-note">Unproven role: insufficient personal or meta role evidence. Treat this score as exploratory.</div>'}
     <div class="dim">${e.roleGames} observed role games · ${e.effectiveGames.toFixed(1)} weighted games<br>
     Prior: ${pct(e.prior)} · ${pct(e.priorWeight)} of the shrunk record<br>${e.source}<br>
     Role comfort ${points(e.comfort)} · role penalty ${points(-e.rolePenalty)}<br>
@@ -1694,7 +1699,7 @@ function emptyPoolMessage() {
     return [assigned && slots[i].player ? `${esc(slots[i].player.split("#")[0])} · ${ROLE_LABEL[role]}` : ROLE_LABEL[role]];
   });
   const reason = blocked.length ? `No eligible picks for ${blocked.join(", ")}.` : "No distinct five-champion comp meets these filters and locks.";
-  return `${reason} Lower the games-in-role minimum or mastery floor, widen the maximum, or change a player/lock. Filters have not been relaxed automatically.`;
+  return `${reason} Adjust mastery or games-in-role filters, change a player/lock, or explicitly enable Allow unproven roles. Filters have not been relaxed automatically.`;
 }
 
 // Original pre-review model is retained only as a prospective comparison baseline.
@@ -1746,7 +1751,7 @@ function predictionRecord(assign, capturedAt = new Date().toISOString(), side = 
     alternatives:alternatives.slice(0,3).map(a=>({comp:a.comp.map(identity),scores:{current:a.score.total},rawTotal:a.score.rawTotal})),
     alternativesNotice:"Unplayed one-swap alternatives have no observed outcome.",
     evaluationCohort:{historyComplete:historyCompleteness(),historyStatus:D.history?.status||null},
-    settings:{strictRole,minRoleGames:minGames,maxRoleGames:maxGames,masteryMin,masteryMax,draftMode,searchCandidates:"all-eligible"},
+    settings:{strictRole,allowUnprovenRoles,minRoleGames:minGames,maxRoleGames:maxGames,masteryMin,masteryMax,draftMode,searchCandidates:"all-eligible"},
     meta:META?{patch:META.patch,tier:META.tier||null,region:META.region,analyzedAt:META.analyzedAt,fetchedAt:META.fetchedAt}:null,
     dataGeneratedAt:/[zZ]|[+-]\d{2}:?\d{2}$/.test(D.generatedAt||"") ? D.generatedAt : null,
     dataGeneratedAtRaw:D.generatedAt,history:D.history||null,evidence,
@@ -2015,6 +2020,7 @@ function render() {
           }).join("")}
           ${masteryControl("")}
           ${gamesControl("")}
+          ${roleEligibilityControl("")}
           <button class="btn full" id="opt">Optimize comp</button>
         </div>
         <div class="card">
@@ -2051,6 +2057,7 @@ function render() {
             title="Emphasize games in the assigned role; off-role champion games still contribute at reduced weight">Role WR</button>
           ${masteryControl("2")}
           ${gamesControl("2")}
+          ${roleEligibilityControl("2")}
         </div>
         <div class="card" style="margin-top:18px">
           <h2 style="margin-bottom:14px"><span id="rankedHead">Top compositions</span>
@@ -2087,6 +2094,15 @@ function render() {
     renderScore();
     rerunActiveSearch(had);
   };
+  document.querySelectorAll("#unprovenToggle, #unprovenToggle2").forEach(button=>
+    button.addEventListener("click",()=>{
+      allowUnprovenRoles=!allowUnprovenRoles;
+      localStorage.setItem("allowUnprovenRoles",allowUnprovenRoles?"1":"0");
+      document.querySelectorAll("#unprovenToggle, #unprovenToggle2").forEach(el=>{
+        el.classList.toggle("active",allowUnprovenRoles);el.setAttribute("aria-pressed",String(allowUnprovenRoles));
+      });
+      filtersChanged();
+    }));
   const setMasteryRange = (lo, hi) => {
     masteryMin = lo; masteryMax = hi;
     localStorage.setItem("masteryFloor", masteryMin);
@@ -3041,6 +3057,11 @@ function emptyIcon() {
     <path d="M12 2l9.5 6.9-3.6 11.2h-11.8L2.5 8.9z"/><circle cx="12" cy="12.4" r="3.2"/></svg>`;
 }
 
+function roleEligibilityControl(suffix) {
+  return `<button class="btn toggle ${allowUnprovenRoles?"active":""}" id="unprovenToggle${suffix}"
+    aria-pressed="${allowUnprovenRoles}" title="Off by default. Picks need ${OWN_ROLE_VIABLE_GAMES}+ personal games in this role, or meta coverage with 100+ games and 10%+ role share. Enable to explore unsupported roles in both the picker and optimizer.">Allow unproven roles</button>`;
+}
+
 function renderSlots() {
   if (!$("#slots")) return;  // a data page is showing — the board isn't rendered
   $("#slots").innerHTML = ROLES.map((role, i) => {
@@ -3057,7 +3078,7 @@ function renderSlots() {
       const retained=s.champ&&!eligible.includes(s.champ);
       const cands=retained?[s.champ,...eligible]:eligible;
       if(!eligible.length&&!s.champ)
-        comfortLine+=`<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery / games-in-role filters</div>`;
+        comfortLine+=`<div class="cstat dim" style="margin-bottom:6px">no champs meet the role-evidence, mastery and games-in-role filters</div>`;
       const opt=cid=>`<option value="${cid}" ${s.champ===cid?"selected":""} ${retained&&cid===s.champ?"disabled":""}>${champName(cid)}${retained&&cid===s.champ?" · outside current filters":""}</option>`;
       const playedThere=cands.filter(cid=>(p.champions.find(c=>c.championId===cid)?.roles?.[role]?.games||0)>=2);
       const other=cands.filter(cid=>!playedThere.includes(cid));
@@ -3080,6 +3101,8 @@ function renderSlots() {
             : `<span class="dim">no ${ROLE_LABEL[role].toLowerCase()} games — scored from meta prior + off-role record</span>`)
             + `<br><span class="dim">all roles ${allRec}</span>`;
         }
+        if (!roleViable(e,s.champ,role))
+          stat += `<br><span class="banned-note">unproven role — ${allowUnprovenRoles?"exploratory pick":"outside default recommendations"}</span>`;
         if (!inGamesRange(roleGames(e, role)))
           stat += `<br><span class="banned-note">selected pick outside games-in-role range</span>`;
         if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
@@ -3896,7 +3919,7 @@ function switchTab(tab) {
     const res = tab === "overall" ? optimize(10,fixed,pinPlayer)
       : tab === "worst" ? optimizeWorst(10,fixed,pinPlayer)
       : optimizeChamps(10,fixed);
-    rankedTabs[tab] = res && res.length ? res : null;
+    rankedTabs[tab] = res; // retain empty results so filter guidance is shown
   }
   renderTabs();
 }
@@ -3996,7 +4019,8 @@ function renderRanked(results) {
     <th>Score<span class="info" tabindex="0">i<span class="tip">
       Uncalibrated recommendation score, out of 100: average slot evidence and matchup adjustments.
       This is not a probability of winning. Search considers every eligible manual pick,
-      respecting filters, locks, players, roles and distinct champions.</span></span></th>
+      respecting filters, locks, players, roles and distinct champions. Unproven roles are excluded
+      unless you enable them or explicitly lock a pick.</span></span></th>
     <th>Comp</th></tr>
     ${results.map((r, i) => `
       <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
