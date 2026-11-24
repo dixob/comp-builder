@@ -2,6 +2,9 @@ name = "comp-builder-api"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
 
+[build]
+command = "python3 ../scripts/build_worker_scoring.py --check"
+
 # Daily meta (OP.GG) + Data Dragon refresh, 09:00 UTC
 [triggers]
 crons = ["0 9 * * *"]

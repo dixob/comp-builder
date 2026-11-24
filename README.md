@@ -97,12 +97,14 @@ assigned role, within the selected queue view. Both bounds are hard filters.
 Cards explain the role sample, prior and score adjustments. The optimizer
 reports the best compositions found within its candidate pool.
 
-With the League bridge running and the website open in **Draft mode**, complete
-live drafts automatically save pregame scores to Cloudflare for evaluation.
-The capture uses the client's actual five players and picks, not manual board
-experiments. There are no recording buttons. The worker checks for the real
-result automatically, preserving pregame evidence separately from outcomes.
-Games without a pregame capture are not reconstructed afterward.
+With the **League bridge running**, complete live drafts automatically save
+pregame scores to Cloudflare for evaluation, even when the website is closed.
+The worker calculates scores from actual client picks and its published player
+snapshot using the same scoring source as the website. Background collection
+uses fixed defaults (all ranked history, standard role weighting), independent
+of browser preferences. There are no recording buttons or browser uploads.
+The worker collects matching Riot results afterward. Games without a pregame
+capture are not reconstructed after the fact.
 
 Developers can download the collection with `python3 scripts/export_evaluation.py`
 using the existing admin token. Freeze a queue-specific evaluation plan before
@@ -139,6 +141,13 @@ from the local raw cache. Rebuild seeds with `python3 build_seed.py`; the large
 The worker's new Durable Object migration must be deployed together with its
 updated configuration. Keep a private backup before replacing any production
 seed. A deployment/reseed is separate from running the tests below.
+
+## Shared background scoring
+
+`python3 scripts/build_worker_scoring.py` generates the static worker scorer from
+`index.html`. Run it after scoring changes. Wrangler's build hook checks that the
+generated file is current; parity tests compare browser and worker outputs.
+No runtime code downloads or `eval` are used.
 
 ## Checks
 

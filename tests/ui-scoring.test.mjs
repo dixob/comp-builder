@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import {spawnSync} from 'node:child_process';
+import {createScorer} from '../worker/src/scoring.generated.mjs';
 const root=new URL('../',import.meta.url);
 const html=fs.readFileSync(new URL('index.html',root),'utf8');
 const script=html.match(/<script>\s*"use strict";([\s\S]*?)<\/script>/)[1];
@@ -246,36 +247,30 @@ if(process.env.COMPY_BENCHMARK){
  }
 }
 
-test('automatic capture uses real live picks and restores manual exploration state',()=>{
- const c=context();setRecordedBoard(c);
- run(c,`draft={active:true,ts:Date.now(),sessionId:'recorded-roster-protocol-check',
-  ours:board.map(p=>({riotId:p.player,position:p.role,championId:p.champ})),
-  enemy:Object.keys(META.champions).map(Number).filter(cid=>!board.some(p=>p.champ===cid)).slice(0,5),bans:[]};
-  manualBans=new Set([board[0].champ]);manualEnemy=new Set([board[1].champ]);
-  allyLock.set(board[0].role,board[1].champ);fearless=true;fearlessChamps=new Set([board[2].champ]);
-  original={manualBans,manualEnemy,allyLock,draftMode,dAdjCache,candCache};`);
- const record=run(c,'livePredictionRecord(draft)');
- assert(record);assert.equal(record.automatic.sessionId,'recorded-roster-protocol-check');
- assert.deepEqual(Array.from(record.comp,p=>p.championId),Array.from(run(c,'board.map(p=>p.champ)')));
- assert(run(c,'manualBans===original.manualBans&&manualEnemy===original.manualEnemy&&allyLock===original.allyLock&&draftMode===original.draftMode&&dAdjCache===original.dAdjCache&&candCache===original.candCache'));
- assert.equal(run(c,'livePredictionRecord({...draft,active:false})'),null);
- assert.equal(run(c,'livePredictionRecord({...draft,ts:Date.now()-81000})'),null);
- assert.equal(run(c,'livePredictionRecord({...draft,ours:draft.ours.slice(1)})'),null);
- assert.equal(run(c,'livePredictionRecord({...draft,enemy:draft.enemy.slice(1)})'),null);
+
+test('worker and browser produce identical scores, components and evidence for both role modes',()=>{
+ for(const strict of [false,true]) {
+  const c=context();setRecordedBoard(c);
+  run(c,`strictRole=${strict};indCache={};candCache={};
+   liveOurs=board.map(p=>({riotId:p.player,position:p.role,championId:p.champ}));
+   liveEnemy=new Set(Object.keys(META.champions).map(Number).filter(cid=>!board.some(p=>p.champ===cid)).slice(0,5));draftMode=true;
+   draft={ours:liveOurs,enemy:[...liveEnemy],bans:[]};`);
+  // Mechanical projections of recorded counts test numeric parity, not accuracy.
+  run(c,`counterIdx=Object.fromEntries([...liveEnemy].flatMap(cid=>ROLES.map(role=>[cid+'|'+OPGG_POS[role],
+    Object.fromEntries(D.players.flatMap(p=>p.champions).map(ch=>[ch.championId,{play:ch.games,win:ch.wins}]))])));`);
+  const capturedAt=new Date().toISOString();c.capturedAt=capturedAt;
+  const expected=JSON.parse(JSON.stringify(run(c,'predictionRecord(board,capturedAt)')));
+  const scorer=createScorer(players,meta,run(c,'draft'),{strictRole:strict});
+  const actual=scorer.record(run(c,'counterIdx'),capturedAt);
+  for(const field of ['scores','components','evidence','comp','candidates','gradeComparison','meta'])
+   assert.deepEqual(JSON.parse(JSON.stringify(actual[field])),expected[field],field);
+  assert.equal(actual.settings.capturePolicy,'server-standard-v1');
+  assert.equal(actual.settings.flexOnly,false);
+ }
 });
 
-test('automatic capture retries transport failures and suppresses duplicate uploads',async()=>{
- const c=context();setRecordedBoard(c);
- c.document.querySelector=()=>null;
- run(c,`liveMode=true;draftMode=true;liveDraft={active:true,ts:Date.now(),sessionId:'recorded-roster-transport',
-  ours:board.map(p=>({riotId:p.player,position:p.role,championId:p.champ})),
-  enemy:Object.keys(META.champions).map(Number).filter(cid=>!board.some(p=>p.champ===cid)).slice(0,5),bans:[]};`);
- const requests=[];
- c.fetch=async(url,options)=>{requests.push(JSON.parse(options.body));if(requests.length===1)throw new Error('transport failed');return {ok:true,json:async()=>({ok:true})};};
- await run(c,'autoCollectLivePrediction()');
- assert.match(run(c,'automaticCaptureStatus'),/pending/);
- await run(c,'autoCollectLivePrediction()');
- await run(c,'autoCollectLivePrediction()');
- assert.equal(requests.length,2);assert.equal(requests[1].automatic.sessionId,'recorded-roster-transport');
- assert.match(run(c,'automaticCaptureStatus'),/saved automatically/);
+test('deployment fails if generated worker scoring differs from website source',()=>{
+ const result=spawnSync('python3',['scripts/build_worker_scoring.py','--check'],{cwd:root,encoding:'utf8'});
+ assert.equal(result.status,0,result.stdout+result.stderr);
+ assert(!html.includes("WORKER_URL+'/evaluation'"),'The browser must not upload predictions');
 });

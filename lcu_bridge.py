@@ -8,7 +8,9 @@ Run this on the machine where League is open (before or during champ select):
 It finds the client's lockfile, polls the champ-select session a few times a
 second, and POSTs bans + picks to the Cloudflare worker whenever they change.
 With Draft mode on, the web page polls the worker and updates itself — bans
-and enemy picks drop out of candidate lists as they happen.
+and enemy picks drop out of candidate lists as they happen. Cloudflare also
+captures evaluation scores from complete drafts automatically, even when the
+website is closed. Keep this bridge running during champ select.
 
 Reads worker_url from config.json (same directory); no third-party
 dependencies. The LCU API only listens on 127.0.0.1, so this must

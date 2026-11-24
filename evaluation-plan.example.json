@@ -5,6 +5,7 @@
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
   "modelVersion": "2026-11-24.3",
+  "capturePolicy": "server-standard-v1",
   "comparisonScores": ["current", "noSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",
   "requireCompleteHistory": true,

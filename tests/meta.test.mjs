@@ -7,7 +7,8 @@ import test from 'node:test';
 const root = new URL('../', import.meta.url);
 const meta = JSON.parse(fs.readFileSync(new URL('data/meta.json', root), 'utf8'));
 const players = JSON.parse(fs.readFileSync(new URL('data/players.json', root), 'utf8'));
-const source = fs.readFileSync(new URL('worker/src/index.js', root), 'utf8');
+const source = fs.readFileSync(new URL('worker/src/index.js', root), 'utf8')
+  .replace("'./scoring.generated.mjs'",JSON.stringify(new URL('worker/src/scoring.generated.mjs',root).href));
 const { default: worker, StateHub } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const response = body => new Response(JSON.stringify(body), {
   headers: { 'Content-Type': 'application/json' },

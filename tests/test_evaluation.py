@@ -362,3 +362,34 @@ class AutomaticEvaluationTests(unittest.TestCase):
         del record['automatic']['receivedAt']
         with self.assertRaises(ValueError):
             evaluator.validate_record(record)
+
+    def test_worker_provenance_allows_later_receipt_but_never_changes_computation_time(self):
+        record, _ = recorded_case()
+        captured = evaluator.timestamp(record['capturedAt'])
+        source = (ROOT / 'worker/src/scoring.generated.mjs').read_text()
+        digest = evaluator.re.search(r'SCORING_SOURCE_SHA = "([0-9a-f]+)"', source).group(1)
+        record['automatic'] = {'source': 'live-draft-worker', 'sessionId': record['id'],
+                               'computedAt': record['capturedAt'], 'receivedAt': evaluator.iso(captured + 120000),
+                               'scoringSourceSha': digest}
+        evaluator.validate_record(record)
+        for key, value in [('computedAt', evaluator.iso(captured + 1)),
+                           ('receivedAt', evaluator.iso(captured - 1)), ('scoringSourceSha', '')]:
+            wrong = deepcopy(record)
+            wrong['automatic'][key] = value
+            with self.assertRaises(ValueError):
+                evaluator.validate_record(wrong)
+
+    def test_capture_policy_plan_excludes_browser_and_missing_settings(self):
+        record, match = recorded_case()
+        record['settings'] = {'capturePolicy': 'server-standard-v1'}
+        rows, _ = evaluator.link_records([record], [match])
+        plan = {'schemaVersion': 1, 'validationFrom': '2027-01-01', 'testFrom': '2027-02-01',
+                'queue': match['info']['queueId'], 'modelVersion': record['modelVersion'],
+                'comparisonScores': ['current'], 'primaryMetric': 'logLoss', 'capturePolicy': 'server-standard-v1'}
+        self.assertEqual(len(evaluator.filter_cohort(rows, plan=plan)[0]), 1)
+        for settings in ({}, {'capturePolicy': 'actual-live-picks-v1'}):
+            record['settings'] = settings
+            rows, _ = evaluator.link_records([record], [match])
+            selected, reasons = evaluator.filter_cohort(rows, plan=plan)
+            self.assertEqual(selected, [])
+            self.assertEqual(reasons, {'capture_policy_filter': 1})

@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 import math
 import random
 from pathlib import Path
@@ -23,7 +24,7 @@ COMPONENT_NAMES = {"personal", "meta", "player", "comfort", "rolePenalty", "matc
                    "championSynergy", "playerSynergy", "rawTotal"}
 PLAN_REQUIRED = {"schemaVersion", "validationFrom", "testFrom", "queue", "modelVersion",
                  "comparisonScores", "primaryMetric"}
-PLAN_OPTIONAL = {"minimumPracticalImprovement", "notes", "requireCompleteHistory", "minimumDurationSeconds", "testUntil"}
+PLAN_OPTIONAL = {"minimumPracticalImprovement", "notes", "requireCompleteHistory", "minimumDurationSeconds", "testUntil", "capturePolicy"}
 
 
 def finite_number(value):
@@ -73,6 +74,8 @@ def validate_plan(plan):
         raise ValueError("plan queue must be a positive integer")
     if not isinstance(plan["modelVersion"], str) or not plan["modelVersion"].strip():
         raise ValueError("plan modelVersion must be a nonempty string")
+    if "capturePolicy" in plan and (not isinstance(plan["capturePolicy"], str) or not plan["capturePolicy"].strip()):
+        raise ValueError("plan capturePolicy must be a nonempty string")
     names = plan["comparisonScores"]
     if (not isinstance(names, list) or not names or
             any(not isinstance(n, str) or not n.strip() for n in names) or
@@ -113,9 +116,17 @@ def validate_record(record):
     captured = timestamp(record.get("capturedAt"))
     automatic = record.get("automatic")
     if automatic is not None:
-        if (not isinstance(automatic, dict) or automatic.get("source") != "live-draft-browser"
-                or not automatic.get("sessionId") or automatic.get("receivedAt") != record.get("capturedAt")):
+        if (not isinstance(automatic, dict) or automatic.get("source") not in ("live-draft-browser", "live-draft-worker")
+                or not automatic.get("sessionId")):
             raise ValueError("automatic captures require server receipt provenance")
+        if automatic["source"] == "live-draft-browser":
+            if automatic.get("receivedAt") != record.get("capturedAt"):
+                raise ValueError("browser capture must use server receipt time")
+        elif (automatic.get("computedAt") != record.get("capturedAt")
+              or timestamp(automatic.get("receivedAt")) < captured
+              or not isinstance(automatic.get("scoringSourceSha"), str)
+              or not re.fullmatch(r"[0-9a-f]{64}", automatic["scoringSourceSha"])):
+            raise ValueError("worker capture requires computation time, receipt time and scoring source hash")
     for key in ("analyzedAt", "fetchedAt"):
         source_time = (record.get("meta") or {}).get(key)
         if source_time and timestamp(source_time) > captured:
@@ -126,7 +137,7 @@ def validate_record(record):
         raise ValueError("captureStage must be pregame when supplied")
     if record.get("side") is not None and (type(record["side"]) is not int or record["side"] not in (100, 200)):
         raise ValueError("side must be null, 100 or 200")
-    for field in ("history", "evaluationCohort"):
+    for field in ("history", "evaluationCohort", "settings"):
         if record.get(field) is not None and not isinstance(record[field], dict):
             raise ValueError(f"{field} must be an object or null")
     history, cohort = record.get("history") or {}, record.get("evaluationCohort") or {}
@@ -365,6 +376,8 @@ def filter_cohort(rows, *, queue=None, require_complete_history=False, plan=None
             reasons["queue_filter"] += 1
         elif plan and row["modelVersion"] != plan["modelVersion"]:
             reasons["model_version_filter"] += 1
+        elif plan and "capturePolicy" in plan and ((row.get("provenance") or {}).get("settings") or {}).get("capturePolicy") != plan["capturePolicy"]:
+            reasons["capture_policy_filter"] += 1
         elif require_complete_history and row.get("historyComplete") is not True:
             reasons["history_incomplete" if row.get("historyComplete") is False else "history_unknown"] += 1
         elif plan and "testUntil" in plan and row["startMs"] >= timestamp(plan["testUntil"], allow_date=True):

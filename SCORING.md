@@ -198,11 +198,13 @@ Legacy aggregates stay marked incomplete during reconstruction; missing games
 and failed requests remain visible rather than being declared complete.
 
 The `predictionRecord` hook constructs pregame scores and comparison variants.
-Complete live drafts automatically upload those snapshots while the website is
-open in Draft mode and the League bridge is running. Manual board changes are
-excluded. Cloudflare stores the server receipt time, deduplicates each draft and
-model, and collects matching Riot outcomes separately. There are no recording
-buttons; see EVALUATION.md for collection limits and authenticated export. The evaluator requires actual future match outcomes, checks
+Cloudflare runs the same scoring source on complete live drafts from the League
+bridge, even with the website closed. It uses fixed standard settings and a
+frozen published data snapshot, retaining computation time and source hash.
+Background retries preserve the original score. Browser prediction uploads are
+disabled. Cloudflare collects matching Riot outcomes separately; see EVALUATION.md
+for collection limits, settings and authenticated export. The evaluator requires
+actual future match outcomes, checks
 identity/composition/queue/timing, avoids duplicate match counts, and reports
 Brier score, log loss, ROC AUC and calibration bins on chronological splits.
 

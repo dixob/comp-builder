@@ -6,32 +6,44 @@ outcomes; it never reconstructs past predictions from today's player aggregates.
 
 ## Automatic collection
 
-Keep the League bridge running and the website open in **Draft mode** until both
-teams have five picks. All five allied players and roles must be recognized.
-The existing bridge works without an update: Cloudflare assigns the draft ID.
-Manual boards, unknown teammates/roles, incomplete or stale feeds, and games
-played without the website open are not captured. The page waits for pending
-matchup requests; failed/missing matchup tables are visible in the snapshot.
+Keep the **League bridge running** during champ select. The website can be closed;
+Draft mode and browser preferences have no effect on collection. No bridge
+update is required. Both teams need five distinct picks, and all five allied
+players and roles must be recognized. Unknown teammates/roles, incomplete or
+stale feeds, and games without bridge observations are not captured.
 
-The capture uses actual client picks, clears manual draft experiments for scoring,
-and restores the board immediately. The current queue/role settings and source
-history coverage are saved. First receipt for an unchanged lineup and model wins
-across tabs and heartbeats; a changed allied pick or role replaces it only during
-the active draft. Both teams must be complete, but this is not guaranteed to be
-the last instant of champ select. Keep settings consistent for a declared cohort;
-do not mix queue/role settings when estimating a specific configuration's accuracy.
+DraftHub schedules a durable alarm on a complete draft. It freezes the last
+published player/meta snapshot, fetches up to 15 relevant matchup tables with
+three-second network timeouts, and runs a static scorer generated from the
+website source. Missing or incompatible matchup tables are recorded explicitly.
+If the draft closes or changes during those reads, the unfinished capture is
+abandoned. Computation time and the player/meta source timestamps are retained.
 
-Cloudflare checks the live lineup and tracked identities, stamps server receipt
-time, and stores the pregame record privately. The draft feed itself remains
-unauthenticated, and scores are browser-computed: collection is observational
-telemetry, not cryptographic proof that a client used the published model.
-Known tampered records must not enter a benchmark.
+The `server-standard-v1` policy uses all ranked history (`flexOnly: false`),
+standard role weighting (`strictRole: false`) and the website's default candidate
+filters. Actual client picks are scored even when those defaults would not
+recommend them. Freeze this policy in collection notes; do not mix it with old
+browser records or different settings when evaluating one configuration.
+
+Predictions are frozen in durable storage before delivery to StateHub. Retries
+reuse the original score and computation timestamp, including when the draft
+has since closed. Receipt time may be later; no retry recomputes against later
+outcomes. A source hash ties each record to the generated scoring implementation.
+First observation for an unchanged draft wins; changed allied picks, roles or
+enemy picks may replace it with another pregame observation. This is not a promise
+to capture the final instant of champ select.
+
+Public prediction uploads are disabled. An internal Durable Object route stores
+worker-computed records; authenticated exports remain available. The bridge feed
+itself is still unauthenticated, so observed identities and timing must still be
+checked against real Riot results. Older `live-draft-browser` exports remain
+readable; new records use `live-draft-worker` provenance.
 
 After capture, durable alarms refresh match history about every five minutes for
 24 hours (subject to Riot rate limits/backfill). The worker retains matching raw
 compact Riot evidence separately from predictions. Matching requires identical
 players, roles, champions, queue, all five enemy champions and a start strictly
-after capture within 15 minutes for automatic records (manual records retain
+after computation within 15 minutes for automatic records (manual records retain
 the six-hour maximum). This reduces false matches after dodges or re-queues. Later refreshes also reconcile delayed history. Dodges and missed or
 ambiguous matches remain visible; the offline evaluator rejects ambiguous matches
 and duplicate match counts. No record is labelled a loss simply because no result
@@ -116,6 +128,7 @@ file for that collection period.
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
   "modelVersion": "2026-11-24.3",
+  "capturePolicy": "server-standard-v1",
   "comparisonScores": ["current", "noSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",
   "requireCompleteHistory": true,
@@ -128,7 +141,8 @@ integer `queue`, a nonempty `modelVersion`, unique `comparisonScores` including
 `current`, and `primaryMetric` (`logLoss` or `brier`). Optional fields are
 `minimumPracticalImprovement` (nonnegative), `requireCompleteHistory`,
 `minimumDurationSeconds` (nonnegative), an exclusive `testUntil` timestamp, and
-`notes`. Unknown fields are rejected to expose misspelled settings. An effect threshold records the decision rule;
+`notes`, and a nonempty `capturePolicy`. The example fixes `server-standard-v1`
+to exclude browser or unknown capture settings from comparisons. Unknown fields are rejected to expose misspelled settings. An effect threshold records the decision rule;
 it does not establish statistical significance or automatically promote a model.
 The evaluator enforces date/cohort filters, not the 100-game collection target;
 keep the intended stopping rule in the frozen notes and collection procedure.
@@ -317,3 +331,11 @@ python3 -m unittest discover -s tests -p 'test_scoring_models.py' -v
 ```
 
 Tests mechanically project actual checked-in scoreboards and meta statistics into the evaluator's input shape. Test timestamps probe before/at/after boundaries. Those test inputs are not historical predictions and must not be included in an accuracy report. No fictional match outcomes are created.
+
+## Keeping the background scorer aligned
+
+Run `python3 scripts/build_worker_scoring.py` after changing the website scoring
+section. The generated `worker/src/scoring.generated.mjs` contains static code
+with isolated state per draft, not a second hand-maintained formula. Wrangler
+runs `--check` before deployment, and tests compare browser and worker scores,
+components, evidence and comparison grades using recorded data.

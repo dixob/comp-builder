@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import {spawnSync} from 'node:child_process';
 
 // Recorded Riot/OP.GG evidence only. IDs and a compact match were extracted
 // from the existing cache; tests vary clocks/transport, not match outcomes.
@@ -8,7 +9,8 @@ const root = new URL('../', import.meta.url);
 const players = JSON.parse(fs.readFileSync(new URL('data/players.json', root)));
 const match = JSON.parse(fs.readFileSync(new URL('tests/fixtures/recorded-flex-match.json', root)));
 const ids = JSON.parse(fs.readFileSync(new URL('tests/fixtures/recorded-match-ids.json', root)));
-const source = fs.readFileSync(new URL('worker/src/index.js', root), 'utf8');
+const source = fs.readFileSync(new URL('worker/src/index.js', root), 'utf8')
+  .replace("'./scoring.generated.mjs'",JSON.stringify(new URL('worker/src/scoring.generated.mjs',root).href));
 const { StateHub, DraftHub, default: worker, compactMatch, matchExclusion, initializeHistory,
   rebuildHistory, expireHistory, historyStatus } = await import('data:text/javascript;base64,' +
     Buffer.from(source + '\nexport {compactMatch,matchExclusion,initializeHistory,rebuildHistory,expireHistory,historyStatus};').toString('base64'));
@@ -218,9 +220,9 @@ function evaluationFixture(t) {
   h.env.DRAFT={idFromName:n=>n,get:()=>({fetch:async()=>response(draft)})};
   const record={schemaVersion:1,id:'transport-check',modelVersion:'constant-baseline',
     captureStage:'pregame',capturedAt:new Date(captured).toISOString(),side:null,
-    queue:440,comp,scores:{current:.5},automatic:{sessionId:draft.sessionId}};
-  const post=value=>worker.fetch(new Request('https://compy.example/evaluation',{
-    method:'POST',body:JSON.stringify(value)}),h.env);
+    queue:440,comp,scores:{current:.5},automatic:{sessionId:draft.sessionId,source:'live-draft-worker',computedAt:new Date(captured).toISOString()}};
+  const post=value=>h.hub.fetch(new Request('https://state.internal/__evaluation',{
+    method:'POST',body:JSON.stringify({record:value,draft})}));
   const get=token=>worker.fetch(new Request('https://compy.example/evaluation',{
     headers:token?{'x-admin-token':token}:{}}),h.env);
   return {...h,state,draft,record,post,get,captured};
@@ -281,4 +283,68 @@ test('draft session identity survives heartbeats and rotates after a closed lobb
  assert.equal((await post({...payload,owner:'another-transport-owner'})).status,409);
  await post({active:false,owner:payload.owner});
  await post(payload);assert.notEqual(JSON.parse(h.stored.get('draft')).sessionId,first);
+});
+
+function backgroundFixture(t) {
+ const h=evaluationFixture(t), isolated=harness(h.state);
+ const data={players:structuredClone(players),meta:JSON.parse(fs.readFileSync(new URL('data/meta.json',root)))};
+ const now=Math.max(Date.parse(data.meta.fetchedAt),Date.parse(data.players.generatedAt),Date.now())+60000;
+ t.mock.method(Date,'now',()=>now);
+ h.kv.set('data',JSON.stringify(data));
+ const hub=new DraftHub({storage:isolated.storage,getWebSockets:()=>[]},h.env);
+ const payload={...h.draft,owner:'recorded-transport-owner'};
+ const post=value=>hub.fetch(new Request('https://compy.example/draft',{method:'POST',body:JSON.stringify(value)}));
+ t.mock.method(globalThis,'fetch',async()=>new Response('',{status:503}));
+ return {...h,hub,post,payload,draftStored:isolated.stored,now};
+}
+test('complete bridge drafts collect server-computed predictions with zero website listeners',async t=>{
+ const h=backgroundFixture(t);
+ const posted=await h.post(h.payload);assert.equal(posted.status,200);
+ assert(h.draftStored.has('alarm'));
+ await h.hub.alarm();
+ const page=await (await h.get(h.env.ADMIN_TOKEN)).json();
+ assert.equal(page.records.length,1);
+ const record=page.records[0];
+ assert.equal(record.automatic.source,'live-draft-worker');
+ assert.equal(record.automatic.computedAt,record.capturedAt);
+ assert.match(record.automatic.scoringSourceSha,/^[0-9a-f]{64}$/);
+ assert.equal(record.settings.capturePolicy,'server-standard-v1');
+ assert.equal(record.settings.strictRole,false);assert.equal(record.settings.flexOnly,false);
+ assert(record.settings.matchupTablesMissing.length>0);
+ assert.equal(JSON.parse(h.draftStored.get('draft')).evaluation.status,'saved');
+ const validation=spawnSync('python3',['-c','import json,sys; from scripts.evaluate_predictions import validate_record; validate_record(json.load(sys.stdin))'],{cwd:root,input:JSON.stringify(record),encoding:'utf8'});
+ assert.equal(validation.status,0,validation.stderr);
+ await h.post(h.payload);await h.hub.alarm();
+ assert.equal((await (await h.get(h.env.ADMIN_TOKEN)).json()).records.length,1);
+ assert.equal((await worker.fetch(new Request('https://compy.example/evaluation',{method:'POST',body:JSON.stringify(record)}),h.env)).status,405);
+ assert.equal((await worker.fetch(new Request('https://compy.example/__evaluation',{method:'POST',body:'{}'}),h.env)).status,404);
+});
+test('a draft closed during matchup I/O is never scored afterward',async t=>{
+ const h=backgroundFixture(t);await h.post(h.payload);
+ let closed=false;
+ t.mock.method(globalThis,'fetch',async()=>{
+  if(!closed){closed=true;await h.post({active:false,owner:h.payload.owner});}
+  return new Response('',{status:503});
+ });
+ await h.hub.alarm();
+ assert.equal((await (await h.get(h.env.ADMIN_TOKEN)).json()).records.length,0);
+ assert(!h.draftStored.has('evaluationPending'));
+});
+test('delivery retries preserve the original server score after the website and draft close',async t=>{
+ const h=backgroundFixture(t);await h.post(h.payload);
+ const original=h.env.STATE.get;
+ h.env.STATE.get=()=>({fetch:async()=>new Response(JSON.stringify({error:'temporarily unavailable'}),{status:503})});
+ await h.hub.alarm();
+ const frozen=structuredClone(h.draftStored.get('evaluationPending'));
+ assert(frozen?.record);
+ await h.post({active:false,owner:h.payload.owner});
+ t.mock.method(Date,'now',()=>h.now+120000);
+ h.kv.set('data',JSON.stringify({players:{players:[]}})); // A later snapshot cannot affect retry.
+ h.env.STATE.get=original;
+ await h.hub.alarm();
+ const record=(await (await h.get(h.env.ADMIN_TOKEN)).json()).records[0];
+ assert(record);assert.equal(record.capturedAt,frozen.record.capturedAt);
+ assert.deepEqual(record.scores,frozen.record.scores);
+ assert(record.automatic.receivedAt>record.automatic.computedAt);
+ assert(!h.draftStored.has('evaluationPending'));
 });

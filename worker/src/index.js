@@ -1,3 +1,5 @@
+import { createScorer, SCORING_SOURCE_SHA } from './scoring.generated.mjs';
+
 // Comp Builder API — Cloudflare Worker.
 //
 // Incremental refresher for the static front-end on GitHub Pages: the full
@@ -11,7 +13,7 @@
 //   POST /seed     -> back up and replace authoritative state (x-admin-token)
 //   POST /draft    -> live champ-select state from lcu_bridge.py (no auth —
 //                     see the route for why)
-//   POST /evaluation -> validate and save a live pregame snapshot
+//   POST /evaluation -> disabled; predictions are computed inside DraftHub
 //   GET  /evaluation -> paginated private records + real outcomes (x-admin-token)
 //   GET  /draft    -> current champ-select state (strongly consistent)
 //   GET  /draft/ws -> WebSocket; sends current state on connect, then pushes
@@ -539,14 +541,113 @@ const COUNTERS_TTL = 24 * 60 * 60;  // matchup stats move slowly
 // beats means it is gone, not merely quiet.
 const OWNER_TTL_MS = 80 * 1000;
 
+function captureKey(draft) {
+  if (!draft?.active || !draft.sessionId || Date.now()-draft.ts>=OWNER_TTL_MS ||
+      !Array.isArray(draft.ours) || draft.ours.length!==5 || !Array.isArray(draft.enemy) ||
+      new Set(draft.enemy).size!==5 || draft.enemy.some(c=>!Number.isInteger(c)||c<=0) ||
+      draft.ours.some(p=>!p || !p.riotId || !EVAL_ROLES.includes(p.position) || !Number.isInteger(p.championId)||p.championId<=0) ||
+      new Set(draft.ours.map(p=>p.position)).size!==5 ||
+      new Set(draft.ours.map(p=>canonicalRiotId(p.riotId))).size!==5 ||
+      new Set([...draft.enemy,...draft.ours.map(p=>p.championId)]).size!==10) return null;
+  return draft.sessionId+':'+evaluationSignature(draft.ours.map(p=>({role:p.position,riotId:p.riotId,championId:p.championId})))
+    +':'+[...draft.enemy].sort((a,b)=>a-b).join(',');
+}
+
+// Freeze data before network awaits. Bounded matchup reads keep capture quick
+// and below the free Worker's subrequest budget; missing tables are explicit.
+async function backgroundTables(env, meta, requests) {
+  const tables={}, missing=[];
+  const region=meta?.region||'na',tier=meta?.tier||'emerald_plus',patch=meta?.patch||'latest';
+  await Promise.all(requests.slice(0,15).map(async ({champ,pos})=>{
+    const key=`${champ}|${pos}`, cacheKey=`counters:${region}:${tier}:${patch}:${champ}:${pos}`;
+    const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),3000);
+    try {
+      let entry=await env.KV.get(cacheKey,'json');
+      if (!entry) {
+        const response=await fetch(`https://lol-api-champion.op.gg/api/${region}/champions/ranked/${champ}/${pos}?tier=${encodeURIComponent(tier)}`,
+          {signal:controller.signal,headers:{'User-Agent':'Mozilla/5.0'}});
+        if (!response.ok) throw new Error('matchup unavailable');
+        const raw=await response.json();
+        entry={champ,pos,tier,patch:raw.meta?.version||patch,counters:raw.data?.counters};
+        if (Array.isArray(entry.counters) && entry.patch===patch)
+          await env.KV.put(cacheKey,JSON.stringify(entry),{expirationTtl:COUNTERS_TTL});
+      }
+      if (!Array.isArray(entry.counters)||entry.patch!==patch||entry.tier!==tier) throw new Error('incompatible matchup table');
+      tables[key]=Object.fromEntries(entry.counters.map(row=>[row.champion_id,row]));
+    } catch { missing.push(key); }
+    finally {clearTimeout(timeout);}
+  }));
+  missing.push(...requests.slice(15).map(r=>`${r.champ}|${r.pos}`));
+  return {tables,missing:missing.sort()};
+}
+
 // The live draft lives in ONE Durable Object instance instead of KV: KV
 // replicates lazily (reads can lag writes by ~60s across colos), a DO is a
 // single authority every request routes to, so a posted ban is readable —
 // and pushed to connected WebSockets — immediately. Sockets use the
 // hibernation API so idle connections cost nothing.
 export class DraftHub {
-  constructor(ctx) {
-    this.ctx = ctx;
+  constructor(ctx, env) {
+    this.ctx = ctx; this.env = env;
+  }
+
+  async captureStatus(key,status,message) {
+    const draft=JSON.parse((await this.ctx.storage.get('draft'))||'{}');
+    if (captureKey(draft)!==key) return;
+    draft.evaluation={key,status,message,updatedAt:Date.now()};
+    const body=JSON.stringify(draft);
+    await this.ctx.storage.put('draft',body);
+    for (const ws of this.ctx.getWebSockets()) {try {ws.send(body);} catch {}}
+  }
+
+  async alarm() {
+    let pending=await this.ctx.storage.get('evaluationPending');
+    let key=pending?.key;
+    try {
+      if (!pending) {
+        const draft=JSON.parse((await this.liveDraft())||'{}');
+        key=captureKey(draft);
+        if (!key || (draft.evaluation?.key===key && draft.evaluation.status==='saved')) return;
+        const data=await this.env.KV.get('data','json');
+        if (!data?.players?.players?.length) throw new Error('Player data is not available yet');
+        let scorer;
+        try {scorer=createScorer(data.players,data.meta,draft);}
+        catch (e) {await this.captureStatus(key,'skipped',e.message);return;}
+        const {tables,missing}=await backgroundTables(this.env,data.meta,scorer.requests);
+        // Discard work if the bridge closed or changed the draft during I/O.
+        const latest=JSON.parse((await this.liveDraft())||'{}');
+        if (captureKey(latest)!==key) return;
+        const capturedAt=new Date(Date.now()).toISOString();
+        const record=scorer.record(tables,capturedAt);
+        record.automatic={sessionId:draft.sessionId,source:'live-draft-worker',computedAt:capturedAt,scoringSourceSha:SCORING_SOURCE_SHA};
+        record.settings.matchupTablesMissing=missing;
+        pending={key,record,draft:latest};
+        // Freeze before delivery: retries never recompute using later outcomes.
+        await this.ctx.storage.put('evaluationPending',pending);
+      }
+      const response=await stateOwner(this.env).fetch(new Request('https://state.internal/__evaluation',{
+        method:'POST',body:JSON.stringify(pending)}));
+      const result=await response.json();
+      if (response.ok && result.ok!==true) throw new Error('Invalid collector acknowledgement');
+      if (!response.ok) {
+        await this.captureStatus(key,'error',result.error||'Collection failed');
+        if (response.status>=500 && response.status!==507) throw new Error('Collector temporarily unavailable');
+        await this.captureStatus(key,response.status===507?'blocked':'rejected',result.error||'Collection rejected');
+        if (response.status!==507) {
+          await this.ctx.storage.put('evaluationRejected:'+pending.draft.sessionId,pending);
+          await this.ctx.storage.delete('evaluationPending');
+        }
+        return;
+      }
+      await this.ctx.storage.delete('evaluationPending');
+      await this.captureStatus(key,'saved','Pregame scores saved in the background.');
+      const current=JSON.parse((await this.liveDraft())||'{}');
+      if (captureKey(current) && captureKey(current)!==key) await this.ctx.storage.setAlarm(Date.now()+250);
+    } catch (e) {
+      await this.captureStatus(key,'retrying',e.message||'Collection will retry');
+      const current=JSON.parse((await this.liveDraft())||'{}');
+      if (pending || captureKey(current)) await this.ctx.storage.setAlarm(Date.now()+5000);
+    }
   }
 
   // A dead bridge must not strand a draft: its last heartbeat leaves
@@ -597,8 +698,15 @@ export class DraftHub {
         ? held && prev.sessionId ? prev.sessionId : crypto.randomUUID()
         : prev.sessionId || null;
       draft.ts = Date.now();
+      const key=captureKey(draft);
+      draft.evaluation=key && prev.evaluation?.key===key ? prev.evaluation
+        : {status:key?'pending':'waiting',message:'Background collection waits for a complete tracked draft.'};
       const body = JSON.stringify(draft);
       await this.ctx.storage.put("draft", body);
+      if (key && !['saved','rejected','blocked'].includes(draft.evaluation.status)) {
+        const alarm=await this.ctx.storage.getAlarm();
+        if (!alarm || alarm>Date.now()+250) await this.ctx.storage.setAlarm(Date.now()+250);
+      }
       for (const ws of this.ctx.getWebSockets()) {
         try { ws.send(body); } catch { /* peer gone; close event cleans up */ }
       }
@@ -867,7 +975,7 @@ async function refreshMeta(env) {
 
 // Single owner for aggregate/history mutations. The queue spans network awaits;
 // using only a process-local lock in the outer Worker would not serialize colos.
-// Prospective evaluation: browser scores are stored before outcomes exist.
+// Prospective evaluation: the worker computes scores before outcomes exist.
 // The draft feed is unauthenticated; this is observational telemetry, not an
 // authenticated source of model truth. Riot identity/timing checks are separate.
 const EVAL_ROLES = ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'];
@@ -904,7 +1012,7 @@ export class StateHub {
     this.tail = task.catch(() => {});
     return task;
   }
-  async collectEvaluation(req, state) {
+  async collectEvaluation(req, state, trustedDraft = null) {
     if (req.method === 'GET') {
       if (!this.env.ADMIN_TOKEN || req.headers.get('x-admin-token') !== this.env.ADMIN_TOKEN)
         return json({error:'forbidden'},403);
@@ -920,14 +1028,12 @@ export class StateHub {
       return json({schemaVersion:1,records,matches:[...matches.values()],collection,
         nextCursor:entries.size===100 ? [...entries.keys()].at(-1) : null});
     }
-    if (req.method !== 'POST') return json({error:'method not allowed'},405);
+    if (req.method !== 'POST' || !trustedDraft) return json({error:'predictions are collected by the background worker'},405);
     const body = await req.text();
     if (new TextEncoder().encode(body).length > 64000) return json({error:'record too large'},413);
     let record;
     try { record = JSON.parse(body); } catch { return json({error:'invalid JSON'},400); }
-    const draftResponse = await this.env.DRAFT.get(this.env.DRAFT.idFromName('main'))
-      .fetch(new Request('https://draft.internal/draft'));
-    const draft = await draftResponse.json(), now = Date.now();
+    const draft=trustedDraft, now=Date.parse(record.capturedAt);
     if (!draft.active || new Set(draft.enemy||[]).size!==5 || now-draft.ts>=OWNER_TTL_MS || !draft.sessionId || record?.automatic?.sessionId!==draft.sessionId)
       return json({error:'no matching live draft'},409);
     const comp = record.comp;
@@ -940,7 +1046,7 @@ export class StateHub {
     if (comp.some(p=>!state.config.riotIds.some(a=>canonicalRiotId(a.riotId)===canonicalRiotId(p.riotId))))
       return json({error:'untracked player'},400);
     const captured = Date.parse(record.capturedAt);
-    if (record.schemaVersion!==1 || !Number.isFinite(captured) || Math.abs(now-captured)>30000 || record.captureStage!=='pregame' ||
+    if (record.schemaVersion!==1 || !Number.isFinite(captured) || captured>Date.now() || record.automatic?.computedAt!==record.capturedAt || record.automatic?.source!=='live-draft-worker' || record.captureStage!=='pregame' ||
         typeof record.modelVersion!=='string' || record.modelVersion.length>80 ||
         !(record.queue==='ranked'||[420,440].includes(record.queue)) ||
         !record.scores || typeof record.scores.current!=='number' ||
@@ -952,23 +1058,25 @@ export class StateHub {
       return json({error:'invalid pregame record'},400);
     const id = encodeURIComponent(draft.sessionId+':'+record.modelVersion);
     const key = 'eval:meta:'+id, recordKey='eval:record:'+id;
-    const previous = await this.ctx.storage.get(key), signature=evaluationSignature(comp);
-    // First observation for an unchanged lineup wins across tabs/reconnects.
-    // A real pick/role swap replaces it only while this draft remains active.
+    const previous = await this.ctx.storage.get(key), signature='server-standard-v1:'+evaluationSignature(comp)+':'+[...draft.enemy].sort((a,b)=>a-b).join(',');
+    // First observation for an unchanged draft wins across alarm retries.
+    // A new lineup may replace it using its frozen pregame computation time.
     if (previous?.signature===signature) return json({ok:true,duplicate:true});
     if (previous?.matchedIds?.length) return json({error:'outcome already observed'},409);
     if (!previous && (await this.ctx.storage.list({prefix:'eval:meta:',limit:EVAL_LIMIT})).size>=EVAL_LIMIT)
       return json({error:'evaluation storage full; export and archive before collecting more'},507);
     record.id='auto:'+id;record.capturedAt=new Date(now).toISOString();
     record.opponents=draft.enemy.map(championId=>({championId,role:null}));
-    record.automatic={sessionId:draft.sessionId,source:'live-draft-browser',policy:'first-per-lineup-v1',receivedAt:record.capturedAt};
-    // Bind identities to our roster rather than trusting browser aliases.
+    record.automatic={sessionId:draft.sessionId,source:'live-draft-worker',policy:'server-standard-v1',
+      computedAt:record.capturedAt,receivedAt:new Date(Date.now()).toISOString(),scoringSourceSha:record.automatic.scoringSourceSha};
+    // Bind identities to the tracked roster and its known account aliases.
     record.comp=comp.map(p=>{const a=state.config.riotIds.find(a=>canonicalRiotId(a.riotId)===canonicalRiotId(p.riotId));
       return {...p,riotId:a.riotId,puuid:a.puuid,puuidHistory:a.puuids||[a.puuid]};});
     await this.ctx.storage.put({[recordKey]:record,
       [key]:{recordKey,signature,capturedAt:record.capturedAt,matchedIds:[]}});
     const alarm=await this.ctx.storage.getAlarm();
-    if (!alarm || alarm>now+300000) await this.ctx.storage.setAlarm(now+300000);
+    const refreshAt=Math.max(Date.now()+20000,now+300000);
+    if (!alarm || alarm>refreshAt) await this.ctx.storage.setAlarm(refreshAt);
     return json({ok:true,capturedAt:record.capturedAt});
   }
   async reconcileEvaluation(state) {
@@ -1103,6 +1211,11 @@ export class StateHub {
         }
         if (!state) return json({ error: 'not seeded — POST /seed first' }, 503);
         initializeHistory(state);
+        if (path === '/__evaluation' && req.method==='POST') {
+          const payload=await req.json();
+          return this.collectEvaluation(new Request('https://state.internal/evaluation',{
+            method:'POST',body:JSON.stringify(payload.record)}),state,payload.draft);
+        }
         if (path === '/evaluation') return this.collectEvaluation(req,state);
         const expired = expireHistory(state);
         if (path === '/data') {
