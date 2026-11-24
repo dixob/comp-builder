@@ -111,6 +111,11 @@ def validate_record(record):
     if not isinstance(record, dict) or not record.get("id") or not record.get("modelVersion"):
         raise ValueError("id and modelVersion are required")
     captured = timestamp(record.get("capturedAt"))
+    automatic = record.get("automatic")
+    if automatic is not None:
+        if (not isinstance(automatic, dict) or automatic.get("source") != "live-draft-browser"
+                or not automatic.get("sessionId") or automatic.get("receivedAt") != record.get("capturedAt")):
+            raise ValueError("automatic captures require server receipt provenance")
     for key in ("analyzedAt", "fetchedAt"):
         source_time = (record.get("meta") or {}).get(key)
         if source_time and timestamp(source_time) > captured:
@@ -195,6 +200,8 @@ def match_record(record, comp, match, horizon_ms):
     if type(start) not in (int, float) or not math.isfinite(start) or start <= 0:
         return None
     captured = timestamp(record["capturedAt"])
+    if record.get("automatic"):
+        horizon_ms = min(horizon_ms, 15 * 60 * 1000)
     if not captured < start <= captured + horizon_ms:
         return None
     if not queue_matches(record["queue"], info.get("queueId")):
@@ -208,6 +215,12 @@ def match_record(record, comp, match, horizon_ms):
         if record.get("side") is not None and record["side"] != team_id:
             continue
         team = [p for p in participants if p.get("teamId") == team_id]
+        if record.get("automatic"):
+            expected = [p.get("championId") for p in record.get("opponents", [])]
+            opponents = [p.get("championId") for p in participants if p.get("teamId") != team_id]
+            if (len(expected) != 5 or any(type(cid) is not int for cid in expected + opponents)
+                    or sorted(expected) != sorted(opponents)):
+                continue
         if len(team) != 5:
             continue
         matched = []
@@ -260,7 +273,8 @@ def match_record(record, comp, match, horizon_ms):
             "outcomeAvailableMs": finished,
             "historyComplete": complete, "historyStatus": history_status,
             "evidence": evidence_snapshot,
-            "provenance": {"meta": deepcopy(record.get("meta")),
+            "provenance": {"automatic": deepcopy(record.get("automatic")),
+                           "meta": deepcopy(record.get("meta")),
                            "dataGeneratedAt": record.get("dataGeneratedAt"),
                            "history": deepcopy(record.get("history")),
                            "evaluationCohort": deepcopy(record.get("evaluationCohort")),

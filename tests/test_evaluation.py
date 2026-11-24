@@ -337,3 +337,28 @@ class EvaluationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AutomaticEvaluationTests(unittest.TestCase):
+    def test_automatic_capture_checks_opponents_receipt_and_shorter_horizon(self):
+        match = json.loads((ROOT / 'tests/fixtures/recorded-flex-match.json').read_text())
+        team = [p for p in match['info']['participants'] if p['teamId'] == 100]
+        captured = evaluator.iso(match['info']['gameStartTimestamp'] - 60000)
+        record = {'id': match['metadata']['matchId'], 'modelVersion': 'transport-baseline',
+                  'capturedAt': captured, 'captureStage': 'pregame', 'queue': 440,
+                  'scores': {'current': .5},
+                  'comp': [{'riotId': p['riotIdGameName']+'#'+p['riotIdTagline'],
+                            'puuid': p['puuid'], 'championId': p['championId'], 'role': p['teamPosition']}
+                           for p in team],
+                  'opponents': [{'championId': p['championId']} for p in match['info']['participants'] if p['teamId'] == 200],
+                  'automatic': {'source': 'live-draft-browser', 'sessionId': match['metadata']['matchId'], 'receivedAt': captured}}
+        self.assertEqual(len(evaluator.link_records([record], [match])[0]), 1)
+        wrong = deepcopy(record)
+        wrong['opponents'][0]['championId'] = team[0]['championId']
+        self.assertFalse(evaluator.link_records([wrong], [match])[0])
+        early = deepcopy(record)
+        early['capturedAt'] = evaluator.iso(match['info']['gameStartTimestamp'] - 16 * 60000)
+        early['automatic']['receivedAt'] = early['capturedAt']
+        self.assertFalse(evaluator.link_records([early], [match])[0])
+        del record['automatic']['receivedAt']
+        with self.assertRaises(ValueError):
+            evaluator.validate_record(record)

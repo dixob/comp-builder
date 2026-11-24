@@ -1271,6 +1271,7 @@ let heroAnim = null;         // in-flight rAF handle for the count animation
 let winLog = [];             // [{total, label}] — one point per score change this draft
 let lastDraftEvent = null;   // "Zed banned" — consumed by renderScore for attribution
 const noteEvent = label => { lastDraftEvent = label; };
+const counterRequests = new Set();
 let counterIdx = {};         // "enemyCid|OPGGPOS" -> {ourCid: {play, win}}
 let dAdjCache = {};
 const MATCHUP_WEIGHT = 1;      // matchup deltas are already small; cap below
@@ -1416,8 +1417,10 @@ function ensureCounters(cid, role) {
   if (!role || !WORKER_URL) return;
   const key = cid + "|" + OPGG_POS[role];
   if (counterIdx[key]) return;
+  counterRequests.add(key);
+  const controller=new AbortController(), timeout=setTimeout(()=>controller.abort(),10000);
   const pending = counterIdx[key] = {};  // identity protects against stale responses
-  fetch(`${WORKER_URL}/counters?champ=${cid}&pos=${OPGG_POS[role]}`)
+  fetch(`${WORKER_URL}/counters?champ=${cid}&pos=${OPGG_POS[role]}`,{signal:controller.signal})
     .then(r => r.ok ? r.json() : null)
     .then(j => {
       if (counterIdx[key] !== pending) return;
@@ -1429,7 +1432,8 @@ function ensureCounters(cid, role) {
       noteEvent(champName(cid) + " matchups loaded");
       draftChanged(false);
     })
-    .catch(() => { if (counterIdx[key] === pending) delete counterIdx[key]; });
+    .catch(() => { if (counterIdx[key] === pending) delete counterIdx[key]; })
+    .finally(() => { clearTimeout(timeout); counterRequests.delete(key); autoCollectLivePrediction(); });
 }
 
 // Matchup record for our champ vs an enemy in a lane. OP.GG's counter table
@@ -1755,7 +1759,7 @@ function previousSlotScore(riotId, cid, role) {
     -(e&&roleShare(e,role)<.25 ? .04 : 0)+ROLE_COMFORT_WEIGHT*(playerRoleShare(riotId,role)-.2)+matchup;
 }
 
-// Developer evaluation hook; never records or uploads during normal use.
+// Snapshot builder shared by automatic live-draft capture and offline evaluation.
 function predictionRecord(assign, capturedAt = new Date().toISOString(), side = null) {
   if(!completeComposition(assign) || assign.some(a=>draftUnavailable(a.champ)))
     throw new Error("Choose five distinct players and available champions before recording.");
@@ -1791,6 +1795,54 @@ function predictionRecord(assign, capturedAt = new Date().toISOString(), side = 
     candidates:assign.map(a=>({riotId:a.player,role:a.role,championIds:candidates(a.player,a.role,SEARCH_CANDIDATES)})),
     opponents:[...effEnemy()].map(championId=>({championId,role:enemyRole.get(championId)||null})),
     comparisonModels:{previous:"original K=8, synergy=.5, mastery+.03, unshrunk comfort; pre-review fallbacks",current:MODEL_VERSION}};
+}
+
+// Capture actual client picks, independent of exploratory changes on the board.
+// Existing controls/settings are restored synchronously before rendering resumes.
+function livePredictionRecord(draft) {
+  if (!draft?.active || !draft.sessionId || Date.now()-draft.ts>=80000 || draft.ours?.length!==5 || new Set(draft.enemy||[]).size!==5) return null;
+  const assign=ROLES.map(role=>{
+    const p=draft.ours.find(p=>p.position===role);
+    return {role,player:riotIdForLive(p?.riotId),champ:p?.championId};
+  });
+  if (!completeComposition(assign)) return null;
+  const saved={manualBans,manualEnemy,enemyRole,allyLock,counterAvoid,fearlessSuppress,liveBans,liveEnemy,liveOurs,draftMode,dAdjCache,candCache};
+  try {
+    manualBans=new Set();manualEnemy=new Set();enemyRole=new Map();allyLock=new Map();counterAvoid=new Set();fearlessSuppress=true;
+    liveBans=new Set(draft.bans||[]);liveEnemy=new Set(draft.enemy||[]);liveOurs=draft.ours;draftMode=true;dAdjCache={};candCache={};
+    const record=predictionRecord(assign);
+    record.automatic={sessionId:draft.sessionId};
+    record.settings.capturePolicy='actual-live-picks-v1';
+    record.settings.matchupTablesLoaded=Object.keys(counterIdx).filter(k=>Object.keys(counterIdx[k]).length>0);
+    return record;
+  } finally {
+    ({manualBans,manualEnemy,enemyRole,allyLock,counterAvoid,fearlessSuppress,liveBans,liveEnemy,liveOurs,draftMode,dAdjCache,candCache}=saved);
+  }
+}
+let automaticCaptureBusy=false, automaticCaptureKey='', automaticCaptureStatus='';
+async function autoCollectLivePrediction() {
+  if (!liveMode || !draftMode || automaticCaptureBusy || counterRequests.size || !WORKER_URL) return;
+  let timeout;
+  const draftTimestamp=liveDraft.ts;
+  try {
+    const record=livePredictionRecord(liveDraft);
+    if (!record) return;
+    const key=record.automatic.sessionId+':'+record.modelVersion+':'+JSON.stringify(record.comp.map(p=>[p.riotId,p.championId,p.role]));
+    if (key===automaticCaptureKey) return;
+    automaticCaptureBusy=true;
+    const controller=new AbortController();timeout=setTimeout(()=>controller.abort(),10000);
+    const response=await fetch(WORKER_URL+'/evaluation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(record),signal:controller.signal});
+    const result=await response.json();
+    if (!response.ok) throw new Error(result.error||'capture failed');
+    automaticCaptureKey=key;automaticCaptureStatus='Pregame scores saved automatically for evaluation.';
+  } catch (e) {
+    automaticCaptureStatus='Automatic evaluation capture pending: '+e.message;
+  } finally {
+    clearTimeout(timeout);automaticCaptureBusy=false;
+    if(liveDraft.ts!==draftTimestamp) Promise.resolve().then(autoCollectLivePrediction);
+    const el=document.querySelector('#evaluationNotice');
+    if(el)el.textContent=automaticCaptureStatus||'Live drafts automatically save pregame scores for evaluation.';
+  }
 }
 
 // --- optimizer -----------------------------------------------------------
@@ -2379,6 +2431,7 @@ function renderDraft() {
       ${manualBans.size || manualEnemy.size || allyLock.size
         ? `<button class="btn toggle" id="draftClear" title="Remove all manually entered bans, enemy picks, and pick locks">Clear</button>` : ""}
     </h2>
+    <p class="hint" id="evaluationNotice">${esc(automaticCaptureStatus || "Live drafts automatically save pregame scores for evaluation.")}</p>
     <div class="rift" id="riftMap"></div>
     <div class="draft-row">
       <span class="dlabel">Bans</span>
@@ -2910,6 +2963,7 @@ function draftChanged(rerenderCard = true) {
   else refreshAnswers();
   renderSlots();
   renderScore();
+  autoCollectLivePrediction();
   // a live update can land while a data page is showing — the builder's tab
   // strip isn't rendered there, and the stale caches re-fill on return
   if (page === "builder" && had[activeTab]) switchTab(activeTab);
@@ -2926,8 +2980,9 @@ function riotIdForLive(riotId) {
 }
 
 function applyLiveDraft(j) {
-  if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); return; }
+  if (!j || !j.ts || j.ts === liveDraft.ts) { updateLiveIndicator(); autoCollectLivePrediction(); return; }
   const wasActive = liveDraft.active;
+  if (j.sessionId !== liveDraft.sessionId) automaticCaptureStatus="";
   // Name what just landed before the sets are replaced — the win ticker's
   // delta chip and trend tooltips attribute the move to it.
   if (j.active) {

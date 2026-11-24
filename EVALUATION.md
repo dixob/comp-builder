@@ -1,14 +1,63 @@
 # Evaluating Compy predictions
 
-Match recording is not part of the website interface and is not needed for
-recommendations. Offline evaluation remains available to developers through an
-explicit browser-console capture. Nothing is automatically recorded or uploaded.
+Complete live drafts automatically save pregame scores for evaluation. No manual
+recording is needed. The evaluator joins these decisions to real Riot match-v5
+outcomes; it never reconstructs past predictions from today's player aggregates.
 
-The evaluator joins pregame decisions to real Riot match-v5 outcomes. It never
-invents outcomes, reconstructs past scores from today's player aggregates, or
-claims an unplayed recommendation would have won.
+## Automatic collection
 
-## Collect records (development only)
+Keep the League bridge running and the website open in **Draft mode** until both
+teams have five picks. All five allied players and roles must be recognized.
+The existing bridge works without an update: Cloudflare assigns the draft ID.
+Manual boards, unknown teammates/roles, incomplete or stale feeds, and games
+played without the website open are not captured. The page waits for pending
+matchup requests; failed/missing matchup tables are visible in the snapshot.
+
+The capture uses actual client picks, clears manual draft experiments for scoring,
+and restores the board immediately. The current queue/role settings and source
+history coverage are saved. First receipt for an unchanged lineup and model wins
+across tabs and heartbeats; a changed allied pick or role replaces it only during
+the active draft. Both teams must be complete, but this is not guaranteed to be
+the last instant of champ select. Keep settings consistent for a declared cohort;
+do not mix queue/role settings when estimating a specific configuration's accuracy.
+
+Cloudflare checks the live lineup and tracked identities, stamps server receipt
+time, and stores the pregame record privately. The draft feed itself remains
+unauthenticated, and scores are browser-computed: collection is observational
+telemetry, not cryptographic proof that a client used the published model.
+Known tampered records must not enter a benchmark.
+
+After capture, durable alarms refresh match history about every five minutes for
+24 hours (subject to Riot rate limits/backfill). The worker retains matching raw
+compact Riot evidence separately from predictions. Matching requires identical
+players, roles, champions, queue, all five enemy champions and a start strictly
+after capture within 15 minutes for automatic records (manual records retain
+the six-hour maximum). This reduces false matches after dodges or re-queues. Later refreshes also reconcile delayed history. Dodges and missed or
+ambiguous matches remain visible; the offline evaluator rejects ambiguous matches
+and duplicate match counts. No record is labelled a loss simply because no result
+was found. Stored outcome evidence survives rolling history expiry.
+
+Storage is capped at 1,000 draft/model records; it stops accepting new records
+rather than silently deleting old evidence. Export and arrange administrative
+archival before reaching the cap. Records are not exposed by public data routes.
+
+Download records and real outcome evidence using `admin_token` in ignored
+`config.json`, or the `COMPY_ADMIN_TOKEN` environment variable:
+
+```sh
+python3 scripts/export_evaluation.py --output evaluation-output
+python3 scripts/evaluate_predictions.py evaluation-output/records.json \
+  --matches evaluation-output/matches --plan /absolute/path/compy-plan.json \
+  --split validation --output evaluation-output/validation.json
+```
+
+The export uses authenticated `GET /evaluation` with pagination. `records.json`
+contains pregame snapshots, `matches/` contains actual Riot evidence, and
+`collection.json` shows matched IDs (including empty or ambiguous associations).
+Export files are ignored by Git. Freeze a collection plan before looking at
+outcomes; automatic capture does not automatically train or promote a model.
+
+## Optional developer capture
 
 1. Freeze the collection plan below before collecting outcomes. Set the intended
    queue and roles, and choose the final five players and champions before the

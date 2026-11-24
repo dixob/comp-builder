@@ -197,9 +197,12 @@ queue/window policy. Local fetch, seed and profile scripts use the same policy.
 Legacy aggregates stay marked incomplete during reconstruction; missing games
 and failed requests remain visible rather than being declared complete.
 
-The developer-only `predictionRecord` hook constructs pregame scores and
-comparison variants for offline evaluation. The website has no recording
-controls and does not save or upload these snapshots automatically. The evaluator requires actual future match outcomes, checks
+The `predictionRecord` hook constructs pregame scores and comparison variants.
+Complete live drafts automatically upload those snapshots while the website is
+open in Draft mode and the League bridge is running. Manual board changes are
+excluded. Cloudflare stores the server receipt time, deduplicates each draft and
+model, and collects matching Riot outcomes separately. There are no recording
+buttons; see EVALUATION.md for collection limits and authenticated export. The evaluator requires actual future match outcomes, checks
 identity/composition/queue/timing, avoids duplicate match counts, and reports
 Brier score, log loss, ROC AUC and calibration bins on chronological splits.
 

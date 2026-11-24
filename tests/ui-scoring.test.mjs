@@ -11,7 +11,7 @@ const players=JSON.parse(fs.readFileSync(new URL('data/players.json',root),'utf8
 const meta=JSON.parse(fs.readFileSync(new URL('data/meta.json',root),'utf8'));
 const run=(ctx,code)=>vm.runInContext(code,ctx);
 function context(code=source){
- const ctx=vm.createContext({document:{addEventListener(){}},localStorage:{getItem(){return null;},removeItem(){},setItem(){}},setInterval(){},players:structuredClone(players),meta:structuredClone(meta)});
+ const ctx=vm.createContext({setTimeout,clearTimeout,AbortController,document:{addEventListener(){}},localStorage:{getItem(){return null;},removeItem(){},setItem(){}},setInterval(){},players:structuredClone(players),meta:structuredClone(meta)});
  run(ctx,code);
  run(ctx,`D=players; META=meta;
  masteryIdx=Object.fromEntries(D.players.map(p=>[p.riotId,Object.fromEntries(p.mastery.map(m=>[m.championId,m.points]))]));
@@ -245,3 +245,37 @@ if(process.env.COMPY_BENCHMARK){
   console.log(JSON.stringify({players:players.players.length,candidates:size,elapsedMs:Math.round(performance.now()-start),best:r[0]?.total,results:r.length}));
  }
 }
+
+test('automatic capture uses real live picks and restores manual exploration state',()=>{
+ const c=context();setRecordedBoard(c);
+ run(c,`draft={active:true,ts:Date.now(),sessionId:'recorded-roster-protocol-check',
+  ours:board.map(p=>({riotId:p.player,position:p.role,championId:p.champ})),
+  enemy:Object.keys(META.champions).map(Number).filter(cid=>!board.some(p=>p.champ===cid)).slice(0,5),bans:[]};
+  manualBans=new Set([board[0].champ]);manualEnemy=new Set([board[1].champ]);
+  allyLock.set(board[0].role,board[1].champ);fearless=true;fearlessChamps=new Set([board[2].champ]);
+  original={manualBans,manualEnemy,allyLock,draftMode,dAdjCache,candCache};`);
+ const record=run(c,'livePredictionRecord(draft)');
+ assert(record);assert.equal(record.automatic.sessionId,'recorded-roster-protocol-check');
+ assert.deepEqual(Array.from(record.comp,p=>p.championId),Array.from(run(c,'board.map(p=>p.champ)')));
+ assert(run(c,'manualBans===original.manualBans&&manualEnemy===original.manualEnemy&&allyLock===original.allyLock&&draftMode===original.draftMode&&dAdjCache===original.dAdjCache&&candCache===original.candCache'));
+ assert.equal(run(c,'livePredictionRecord({...draft,active:false})'),null);
+ assert.equal(run(c,'livePredictionRecord({...draft,ts:Date.now()-81000})'),null);
+ assert.equal(run(c,'livePredictionRecord({...draft,ours:draft.ours.slice(1)})'),null);
+ assert.equal(run(c,'livePredictionRecord({...draft,enemy:draft.enemy.slice(1)})'),null);
+});
+
+test('automatic capture retries transport failures and suppresses duplicate uploads',async()=>{
+ const c=context();setRecordedBoard(c);
+ c.document.querySelector=()=>null;
+ run(c,`liveMode=true;draftMode=true;liveDraft={active:true,ts:Date.now(),sessionId:'recorded-roster-transport',
+  ours:board.map(p=>({riotId:p.player,position:p.role,championId:p.champ})),
+  enemy:Object.keys(META.champions).map(Number).filter(cid=>!board.some(p=>p.champ===cid)).slice(0,5),bans:[]};`);
+ const requests=[];
+ c.fetch=async(url,options)=>{requests.push(JSON.parse(options.body));if(requests.length===1)throw new Error('transport failed');return {ok:true,json:async()=>({ok:true})};};
+ await run(c,'autoCollectLivePrediction()');
+ assert.match(run(c,'automaticCaptureStatus'),/pending/);
+ await run(c,'autoCollectLivePrediction()');
+ await run(c,'autoCollectLivePrediction()');
+ assert.equal(requests.length,2);assert.equal(requests[1].automatic.sessionId,'recorded-roster-transport');
+ assert.match(run(c,'automaticCaptureStatus'),/saved automatically/);
+});

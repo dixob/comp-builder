@@ -53,6 +53,7 @@ function fixture(tier) {
     async get(key) { return durable.has(key) ? structuredClone(durable.get(key)) : undefined; },
     async put(key, value) { durable.set(key, structuredClone(value)); },
     async delete(key) { durable.delete(key); },
+    async list() { return new Map(); },
     async setAlarm() {}, async deleteAlarm() {},
   } }, env);
   env.STATE = { idFromName: name => name, get: () => hub };

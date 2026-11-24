@@ -9,7 +9,7 @@ const players = JSON.parse(fs.readFileSync(new URL('data/players.json', root)));
 const match = JSON.parse(fs.readFileSync(new URL('tests/fixtures/recorded-flex-match.json', root)));
 const ids = JSON.parse(fs.readFileSync(new URL('tests/fixtures/recorded-match-ids.json', root)));
 const source = fs.readFileSync(new URL('worker/src/index.js', root), 'utf8');
-const { StateHub, default: worker, compactMatch, matchExclusion, initializeHistory,
+const { StateHub, DraftHub, default: worker, compactMatch, matchExclusion, initializeHistory,
   rebuildHistory, expireHistory, historyStatus } = await import('data:text/javascript;base64,' +
     Buffer.from(source + '\nexport {compactMatch,matchExclusion,initializeHistory,rebuildHistory,expireHistory,historyStatus};').toString('base64'));
 const response = body => new Response(JSON.stringify(body));
@@ -37,7 +37,9 @@ function harness(state) {
   const kv = new Map([['state', JSON.stringify(state)]]), stored = new Map();
   const storage = {
     async get(k) { return structuredClone(stored.get(k)); },
-    async put(k,v) { stored.set(k, structuredClone(v)); },
+    async put(k,v) { if(typeof k === "object") { for(const [key,value] of Object.entries(k)) stored.set(key,structuredClone(value)); } else stored.set(k, structuredClone(v)); },
+    async list({prefix,startAfter,limit=1000}) { return new Map([...stored].filter(([k])=>k.startsWith(prefix)&&(!startAfter||k>startAfter)).sort(([a],[b])=>a.localeCompare(b)).slice(0,limit).map(([k,v])=>[k,structuredClone(v)])); },
+    async getAlarm() { return stored.get("alarm")||null; },
     async delete(k) { stored.delete(k); },
     async setAlarm(v) { stored.set('alarm',v); },
     async deleteAlarm() { stored.delete('alarm'); },
@@ -198,4 +200,85 @@ test('a failing queued match cannot block another match and successful retries n
   await worker.fetch(request('/refresh'),env);
   saved=await hub.readSnapshot();
   assert.equal(Object.values(saved.players).reduce((sum,p)=>sum+Object.values(p.queues).reduce((n,q)=>n+q.games,0),0),total);
+});
+
+// Protocol tests use the checked-in real match, a neutral numeric baseline,
+// and a clock before that match. They do not claim historical model accuracy.
+function evaluationFixture(t) {
+  const state=seed(), h=harness(state), captured=match.info.gameStartTimestamp-60000;
+  t.mock.method(Date,'now',()=>captured);
+  const comp=match.info.participants.filter(p=>p.teamId===100).map(p=>({
+    riotId:state.config.riotIds.find(a=>(a.puuids||[a.puuid]).includes(p.puuid))?.riotId,
+    championId:p.championId,role:p.teamPosition,puuid:p.puuid,
+  }));
+  assert(comp.every(p=>p.riotId));
+  const draft={active:true,sessionId:match.metadata.matchId,ts:captured,
+    ours:comp.map(p=>({riotId:p.riotId,position:p.role,championId:p.championId})),
+    enemy:match.info.participants.filter(p=>p.teamId===200).map(p=>p.championId)};
+  h.env.DRAFT={idFromName:n=>n,get:()=>({fetch:async()=>response(draft)})};
+  const record={schemaVersion:1,id:'transport-check',modelVersion:'constant-baseline',
+    captureStage:'pregame',capturedAt:new Date(captured).toISOString(),side:null,
+    queue:440,comp,scores:{current:.5},automatic:{sessionId:draft.sessionId}};
+  const post=value=>worker.fetch(new Request('https://compy.example/evaluation',{
+    method:'POST',body:JSON.stringify(value)}),h.env);
+  const get=token=>worker.fetch(new Request('https://compy.example/evaluation',{
+    headers:token?{'x-admin-token':token}:{}}),h.env);
+  return {...h,state,draft,record,post,get,captured};
+}
+test('automatic collection verifies live identities, deduplicates tabs, and protects export',async t=>{
+  const h=evaluationFixture(t);
+  assert.equal((await h.get()).status,403);
+  const result=await h.post(h.record);assert.equal(result.status,200,await result.text());
+  assert.equal((await (await h.post(h.record)).json()).duplicate,true);
+  const exported=await (await h.get(h.env.ADMIN_TOKEN)).json();
+  assert.equal(exported.records.length,1);assert.equal(exported.matches.length,0);
+  assert.equal(exported.records[0].capturedAt,new Date(h.captured).toISOString());
+  assert(h.stored.get('alarm')>h.captured);
+  const wrong=structuredClone(h.record);[wrong.comp[0].championId,wrong.comp[1].championId]=[wrong.comp[1].championId,wrong.comp[0].championId];
+  assert.equal((await h.post(wrong)).status,400);
+  assert.equal((await h.post({...h.record,outcome:1})).status,400);
+  assert.equal((await h.post({...h.record,capturedAt:new Date(h.captured-60000).toISOString()})).status,400);
+  h.draft.active=false;
+  assert.equal((await h.post(h.record)).status,409);
+});
+test('automatic outcomes retain real match evidence and reject post-start and wrong-side records',async t=>{
+  const h=evaluationFixture(t);
+  assert.equal((await h.post(h.record)).status,200);
+  await h.hub.reconcileEvaluation(h.state);
+  const exported=await (await h.get(h.env.ADMIN_TOKEN)).json();
+  assert.equal(exported.matches.length,1);
+  assert.equal(exported.matches[0].metadata.matchId,match.metadata.matchId);
+  assert.deepEqual(exported.matches[0],compactMatch(match));
+  assert(!('outcome' in exported.records[0]));
+  assert.equal(exported.collection[0].matchedIds[0],match.metadata.matchId);
+  // Export stays available even if the rolling history window expires later.
+  h.state.history.matches={};await h.hub.reconcileEvaluation(h.state);
+  assert.equal((await (await h.get(h.env.ADMIN_TOKEN)).json()).matches.length,1);
+});
+test('evaluation matching refuses late captures, wrong roles, queues and sides',async()=>{
+  const {evaluationMatch}=await import('data:text/javascript;base64,'+
+    Buffer.from(source+'\nexport {evaluationMatch};').toString('base64'));
+  const team=match.info.participants.filter(p=>p.teamId===100);
+  const record={capturedAt:new Date(match.info.gameStartTimestamp-60000).toISOString(),queue:440,side:100,
+    comp:team.map(p=>({riotId:p.riotIdGameName+'#'+p.riotIdTagline,puuid:p.puuid,championId:p.championId,role:p.teamPosition}))};
+  assert(evaluationMatch(record,match));
+  assert(!evaluationMatch({...record,capturedAt:new Date(match.info.gameStartTimestamp).toISOString()},match));
+  assert(!evaluationMatch({...record,queue:420},match));
+  assert(!evaluationMatch({...record,side:200},match));
+  const wrong=structuredClone(record);[wrong.comp[0].role,wrong.comp[1].role]=[wrong.comp[1].role,wrong.comp[0].role];
+  assert(!evaluationMatch(wrong,match));
+});
+
+test('draft session identity survives heartbeats and rotates after a closed lobby',async t=>{
+ const h=evaluationFixture(t);
+ const draftHub=new DraftHub({storage:h.storage,getWebSockets:()=>[]});
+ const post=payload=>draftHub.fetch(new Request('https://compy.example/draft',{method:'POST',body:JSON.stringify(payload)}));
+ const payload={...h.draft,owner:'test-transport-owner'};
+ await post(payload);
+ const first=JSON.parse(h.stored.get('draft')).sessionId;
+ assert(first);assert.notEqual(first,payload.sessionId,'Client cannot choose the server session ID');
+ await post(payload);assert.equal(JSON.parse(h.stored.get('draft')).sessionId,first);
+ assert.equal((await post({...payload,owner:'another-transport-owner'})).status,409);
+ await post({active:false,owner:payload.owner});
+ await post(payload);assert.notEqual(JSON.parse(h.stored.get('draft')).sessionId,first);
 });

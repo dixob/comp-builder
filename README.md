@@ -97,12 +97,17 @@ assigned role, within the selected queue view. Both bounds are hard filters.
 Cards explain the role sample, prior and score adjustments. The optimizer
 reports the best compositions found within its candidate pool.
 
-Match recording is not part of the website interface and is not required for
-recommendations. Developers can explicitly capture pregame score snapshots
-through the browser console for offline evaluation; see [EVALUATION.md](EVALUATION.md).
-Nothing is automatically recorded or uploaded. Freeze a queue-specific evaluation
-plan before outcomes; the next 100 real games are a collection pilot, not proof
-of an accuracy gain.
+With the League bridge running and the website open in **Draft mode**, complete
+live drafts automatically save pregame scores to Cloudflare for evaluation.
+The capture uses the client's actual five players and picks, not manual board
+experiments. There are no recording buttons. The worker checks for the real
+result automatically, preserving pregame evidence separately from outcomes.
+Games without a pregame capture are not reconstructed afterward.
+
+Developers can download the collection with `python3 scripts/export_evaluation.py`
+using the existing admin token. Freeze a queue-specific evaluation plan before
+outcomes; see [EVALUATION.md](EVALUATION.md). Collection does not itself establish
+an accuracy gain.
 
 The offline tools compare recorded scores and can fit a small regularized model
 on earlier outcomes, with separate validation and untouched test periods.
