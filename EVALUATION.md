@@ -1,15 +1,46 @@
 # Evaluating Compy predictions
 
-Compy now supports recording a chosen composition **before the match starts** and exporting those records from the browser. Records stay in that browser's local storage until exported. They do not prove predictive accuracy on their own.
+Match recording is not part of the website interface and is not needed for
+recommendations. Offline evaluation remains available to developers through an
+explicit browser-console capture. Nothing is automatically recorded or uploaded.
 
-The evaluator joins these saved decisions to real Riot match-v5 outcomes. It never invents outcomes, reconstructs past scores from today's player aggregates, or claims an unplayed recommendation would have won.
+The evaluator joins pregame decisions to real Riot match-v5 outcomes. It never
+invents outcomes, reconstructs past scores from today's player aggregates, or
+claims an unplayed recommendation would have won.
 
-## Collect records
+## Collect records (development only)
 
-1. Set the intended queue and roles, choose all five players and champions, and select **Record comp** before the game begins. Record the final composition that will actually be played. If it changes, the earlier composition will not match the final game.
-2. Complete the match and refresh the roster data as usual. Raw Riot match JSON must be available in `data/matches/` for offline evaluation; the live worker's aggregate counters alone are not enough.
-3. Use **Export records** and save the JSON file locally. Preserve exports; clearing browser storage removes unexported records.
-4. Predeclare fixed chronological boundaries before inspecting model comparisons. Use earlier games for training/exploration, the next interval for validation, and the latest interval as an untouched test set. Boundaries should remain fixed as more records arrive.
+1. Freeze the collection plan below before collecting outcomes. Set the intended
+   queue and roles, and choose the final five players and champions before the
+   game begins. If the composition changes, capture it again before game start.
+2. In Chrome DevTools on the app, run the following command. Save the copied JSON
+   to a file outside the repository. This captures the current score immediately;
+   it does not save anything in browser storage. Use `100` for blue side, `200`
+   for red, or leave `null` when unknown.
+
+   ```js
+   copy(JSON.stringify({
+     schemaVersion: 1,
+     records: [predictionRecord(
+       slots.map((slot, i) => ({...slot, role: ROLES[i]})),
+       new Date().toISOString(),
+       null
+     )]
+   }, null, 2));
+   ```
+
+3. Complete the match and refresh the roster data as usual. Raw Riot match JSON
+   must be available in `data/matches/` for offline evaluation; the live worker's
+   aggregate counters alone are not enough. Combine captures into one `records`
+   array without changing their timestamps, scores, or evidence.
+4. Use the fixed chronological boundaries in the plan: earlier games for training,
+   the next interval for validation, and the latest interval as an untouched test
+   set. Do not reconstruct missing pregame captures after a match.
+
+Records saved with the previous interface are left intact. To recover them in
+Chrome DevTools, run `copy(localStorage.getItem("compy.predictions.v1"))` and save
+the JSON before clearing browser storage. The evaluator also accepts that array
+format.
 
 Do not repeatedly inspect the final test scores while tuning. Tune using `--split validation`; use the test period once when the design is fixed. The evaluator does not fit or tune anything automatically.
 

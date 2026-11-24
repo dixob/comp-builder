@@ -197,9 +197,9 @@ queue/window policy. Local fetch, seed and profile scripts use the same policy.
 Legacy aggregates stay marked incomplete during reconstruction; missing games
 and failed requests remain visible rather than being declared complete.
 
-**Record comp** explicitly saves pregame scores and comparison variants in
-local browser storage. **Export records** downloads them. Nothing is uploaded
-automatically. The evaluator requires actual future match outcomes, checks
+The developer-only `predictionRecord` hook constructs pregame scores and
+comparison variants for offline evaluation. The website has no recording
+controls and does not save or upload these snapshots automatically. The evaluator requires actual future match outcomes, checks
 identity/composition/queue/timing, avoids duplicate match counts, and reports
 Brier score, log loss, ROC AUC and calibration bins on chronological splits.
 

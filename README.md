@@ -97,11 +97,12 @@ assigned role, within the selected queue view. Both bounds are hard filters.
 Cards explain the role sample, prior and score adjustments. The optimizer
 reports the best compositions found within its candidate pool.
 
-Use **Record comp** before the game to save the current composition and model
-comparisons and score components in this browser. **Export records** downloads
-those records for offline evaluation against actual Riot matches. Nothing is
-automatically uploaded. Freeze a queue-specific evaluation plan before outcomes;
-the next 100 real games are a collection pilot, not proof of an accuracy gain.
+Match recording is not part of the website interface and is not required for
+recommendations. Developers can explicitly capture pregame score snapshots
+through the browser console for offline evaluation; see [EVALUATION.md](EVALUATION.md).
+Nothing is automatically recorded or uploaded. Freeze a queue-specific evaluation
+plan before outcomes; the next 100 real games are a collection pilot, not proof
+of an accuracy gain.
 
 The offline tools compare recorded scores and can fit a small regularized model
 on earlier outcomes, with separate validation and untouched test periods.

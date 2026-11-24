@@ -1738,15 +1738,6 @@ function emptyPoolMessage() {
   return `${reason} Lower the games-in-role minimum or mastery floor, widen the maximum, or change a player/lock. Filters have not been relaxed automatically.`;
 }
 
-const PREDICTION_KEY = "compy.predictions.v1";
-function savedPredictions() {
-  const raw = localStorage.getItem(PREDICTION_KEY);
-  if (!raw) return [];
-  const records = JSON.parse(raw);
-  if (!Array.isArray(records)) throw new Error("Saved records are not a valid list; export or back them up before recording.");
-  return records;
-}
-
 // Original pre-review model is retained only as a prospective comparison baseline.
 function previousSlotScore(riotId, cid, role) {
   const e = D.players.find(p=>p.riotId===riotId).champions.find(c=>c.championId===cid);
@@ -1764,6 +1755,7 @@ function previousSlotScore(riotId, cid, role) {
     -(e&&roleShare(e,role)<.25 ? .04 : 0)+ROLE_COMFORT_WEIGHT*(playerRoleShare(riotId,role)-.2)+matchup;
 }
 
+// Developer evaluation hook; never records or uploads during normal use.
 function predictionRecord(assign, capturedAt = new Date().toISOString(), side = null) {
   if(!completeComposition(assign) || assign.some(a=>draftUnavailable(a.champ)))
     throw new Error("Choose five distinct players and available champions before recording.");
@@ -1799,29 +1791,6 @@ function predictionRecord(assign, capturedAt = new Date().toISOString(), side = 
     candidates:assign.map(a=>({riotId:a.player,role:a.role,championIds:candidates(a.player,a.role,SEARCH_CANDIDATES)})),
     opponents:[...effEnemy()].map(championId=>({championId,role:enemyRole.get(championId)||null})),
     comparisonModels:{previous:"original K=8, synergy=.5, mastery+.03, unshrunk comfort; pre-review fallbacks",current:MODEL_VERSION}};
-}
-
-function recordCurrentComp() {
-  const status=$("#recordStatus");
-  try {
-    const sideSelect=$("#recordSide");
-    const record=predictionRecord(slots.map((s,i)=>({...s,role:ROLES[i]})),new Date().toISOString(),Number(sideSelect?.value)||null);
-    const records=savedPredictions();records.push(record);
-    localStorage.setItem(PREDICTION_KEY,JSON.stringify(records));
-    if(sideSelect) sideSelect.value="";
-    status.textContent=`Recorded before the match: ${records.length} saved locally. Keep only the final intended record for each match in evaluation; exports preserve all saved records.`;
-  } catch(e) {status.textContent=e.message||"Could not save this record. Export existing records before trying again.";}
-}
-
-function exportPredictions() {
-  const status=$("#recordStatus");
-  try {
-    const records=savedPredictions();
-    const blob=new Blob([JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),records},null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob),link=document.createElement("a");
-    link.href=url;link.download="compy-predictions.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    status.textContent=`Exported ${records.length} records. Your saved records remain in this browser.`;
-  } catch(e) {status.textContent=e.message||"Could not export saved records.";}
 }
 
 // --- optimizer -----------------------------------------------------------
@@ -2232,8 +2201,6 @@ function render() {
           <p class="dim" id="gradeScope" style="font-size:12px" hidden></p>
           <p class="dim" id="scoreEvidence" style="font-size:12px" hidden></p>
           <div class="breakdown" id="breakdown"></div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px"><label for="recordSide">Side</label><select id="recordSide" aria-label="Your side before the match"><option value="">Unknown</option><option value="100">Blue</option><option value="200">Red</option></select><button class="btn" id="recordComp">Record comp</button><button class="btn" id="exportPredictions">Export records</button></div>
-          <p class="dim" id="recordStatus" role="status" style="font-size:12px">Record before the match starts. Saved only in this browser.</p>
         </div>
         <div class="card" id="riftCard" hidden></div>
         ${PROFILES ? `<div class="card" id="profileCard">
@@ -2275,8 +2242,6 @@ function render() {
     <datalist id="champdl">${Object.keys(CHAMP_BY_NAME).sort()
       .map(k => `<option value="${champName(CHAMP_BY_NAME[k])}">`).join("")}</datalist>`;
   wirePageNav();
-  $("#recordComp").addEventListener("click", recordCurrentComp);
-  $("#exportPredictions").addEventListener("click", exportPredictions);
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
