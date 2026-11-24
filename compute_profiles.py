@@ -3,7 +3,7 @@
 damage mix (physical/magic/true to champions), tankiness (damage taken +
 self-mitigated), crowd control (time CCing others), and shielding.
 
-Every participant in every cached match counts — a champion's damage profile
+Every participant in each configured-queue, in-window cached match counts — a champion's damage profile
 is intrinsic to its kit, so strangers' games are valid signal here (unlike
 synergy, which must be pilot-attributed).
 
@@ -12,6 +12,8 @@ No API calls; run any time after fetch_data.py has populated data/matches/.
 import glob
 import json
 import pathlib
+import time
+from history_policy import match_exclusion
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -35,9 +37,15 @@ def percentile_ranks(values_by_key):
 
 def main():
     agg = {}
+    cfg = json.loads((ROOT / "config.json").read_text())
+    now_ms = time.time() * 1000
+    accepted = 0
     files = glob.glob(str(ROOT / "data" / "matches" / "*.json"))
     for f in files:
         m = json.loads(pathlib.Path(f).read_text())
+        if match_exclusion(m, cfg, now_ms):
+            continue
+        accepted += 1
         for p in m["info"]["participants"]:
             a = agg.setdefault(p["championId"], {k: 0 for k in FIELDS} | {"games": 0})
             a["games"] += 1
@@ -67,9 +75,9 @@ def main():
         for cid, p in profiles.items():
             p[pct_key] = round(ranks.get(cid, 0.5), 3)
 
-    out = {"matchCount": len(files), "champions": {str(k): v for k, v in profiles.items()}}
+    out = {"matchCount": accepted, "champions": {str(k): v for k, v in profiles.items()}}
     (ROOT / "data" / "profiles.json").write_text(json.dumps(out))
-    print(f"Wrote data/profiles.json — {len(profiles)} champions from {len(files)} matches.")
+    print(f"Wrote data/profiles.json — {len(profiles)} champions from {accepted} matches.")
 
 
 if __name__ == "__main__":

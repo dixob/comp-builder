@@ -1,215 +1,219 @@
-# Scoring model
+# Composition scoring
 
-How the comp builder turns raw records into the win-rate estimate on the score
-card. All of this lives in the `--- scoring model ---` section of
-[index.html](index.html) (constants around line 778, functions below them);
-the worker and fetch scripts only supply the data it reads. (The per-game
-"Robert score" and OpenSkill "Robert rating" engine was removed from the app —
-its history lives in git if it ever comes back.)
+Compy ranks candidate compositions with a **score out of 100**. It does not
+estimate a calibrated match-win probability. Historical player and meta win
+rates remain percentages; score adjustments are displayed as points.
 
-The estimate for a full five-man comp is:
+The current model is `2026-11-24.3`, implemented in the scoring section of
+[index.html](index.html). The [review](SCORING_REVIEW.md) records the original
+audit; [EVALUATION.md](EVALUATION.md) explains how to test predictions against
+future outcomes. The current coefficients are conservative heuristics, not
+learned or validated accuracy improvements.
 
-```
-compScore = mean(slot scores of the 5 picks)  +  Σ pairwise synergy adjustments
-```
+Version `.3` keeps those numerical weights. It makes draft recommendations use
+the full composition objective, replaces absolute score verdicts with a bounded
+single-swap comparison, separates evidence labels, and records raw components
+for prospective model validation.
 
-clamped to [0.05, 0.95] (`compScore`, index.html). Every term below is in
-win-rate units — an adjustment of +0.02 means "worth about two percentage
-points of win rate".
+## Composition score
 
-A single pick's score is:
-
-```
-slotScore(player, champ, role) = indScore(player, champ, role) + dAdj(champ, role)
-```
-
-`indScore` is draft-independent and cached; `dAdj` is the draft-mode lane
-matchup nudge.
-
----
-
-## 1. Individual score — `indScore(player, champ, role)`
-
-The base is a **shrunk win rate**: the player's record on the champ, pulled
-toward a meta prior so small samples don't lie.
-
-### The record (role weighting)
-
-Games the player played this champ **in this role** count at full weight.
-Games on the same champ **in other roles** count at `OFF_ROLE_GAME_WEIGHT =
-0.3` (mechanics transfer between roles, but a jungle record shouldn't fully
-back a top-lane pick). With the **Strict role WRs** toggle on, the off-role
-weight halves to `0.15` instead of dropping to zero — a bad record elsewhere
-is still evidence, and zeroing it let demonstrably-losing champs score as
-fresh unknowns.
-
-```
-g = roleGames + (totalGames − roleGames) × offRoleWeight
-w = roleWins  + (totalWins  − roleWins)  × offRoleWeight
+```text
+raw = mean(individual score + draft matchup residual for each slot)
+      + sum(champion-pair and player-pair adjustments over all ten pairs)
+score = 100 × clamp(raw, 0.05, 0.95)
 ```
 
-### Shrinkage toward the meta prior
+Clamping is a display/model bound, not probability calibration. Team-profile
+advice (damage mix, frontline, CC, shielding) does not alter the score.
+The raw value is retained before clamping so ablations and single-swap
+comparisons do not lose differences at the display limits.
 
-```
-wr = (w + prior × K_IND) / (g + K_IND)        K_IND = 8
-```
+## Relative grade and draft answers
 
-Equivalent to adding 8 phantom games at the meta win rate. A player with 0
-games scores exactly the prior; ~8 games is the halfway point where personal
-record and meta pull equally; by ~30 games the personal record dominates.
+The relative grade holds the **same five players and role assignments** fixed.
+For each unlocked slot, it checks up to 15 candidates from that player's filtered
+role pool, changing one champion at a time. It scores each resulting composition
+with the complete formula above, including all pair adjustments and known draft
+matchups, using the raw value before display limits.
 
-### The meta prior — `metaWR(champ, role)`
+The label reports either the best available one-swap improvement in points or
+**Best among checked single swaps**. Improvements below 0.05 points are treated
+as a display tie. Fully locked drafts and empty alternative pools receive
+explicit labels. This is a local comparison within the checked pool, not a
+percentile, letter grade, global optimum or probability of winning. Two changes
+made together can improve a composition even when no single swap does.
 
-From OP.GG current-patch stats (`fetch_meta.py` locally, daily cron in the
-worker):
+**Best answers** uses the same replacement ranking when all five picks are
+complete. For incomplete compositions it uses the slot score and says so.
+Locks, candidate filters, unavailable picks and distinct-champion requirements
+still apply. A matchup's observed win rate and sample size provide context;
+they do not replace the composition objective.
 
-1. If the champ has **≥100 meta games in this role**, use that role's win rate.
-2. Otherwise use the champ's overall win rate **minus** `OFF_META_PRIOR_PENALTY
-   = 0.04` — the champ exists on this patch but isn't played here (Annie bot),
-   so its overall WR is an optimistic prior.
-3. No meta data at all → flat 0.5.
+The separate evidence label uses the smallest observed role sample among the
+five picks: below 5 games is **Limited role evidence**, 5–19 is **Some role
+evidence**, and 20 or more is **Larger role sample**. Incomplete or unverified
+history is flagged separately. These are sample descriptions, not calibrated
+confidence levels or a measure of how likely the top recommendation is best.
 
-### Flat adjustments on top
+## Individual record and prior
 
-| Term | Size | When |
-|---|---|---|
-| Mastery bonus | up to **+0.03** | linear in mastery points, capped at 200k (`masteryBonus`) |
-| Off-role penalty | **−0.04** | the player has games on the champ but <25% of them are in this role (`OFF_ROLE_PENALTY`) |
-| Role comfort | **±0.12 × (share − 0.2)** | share = fraction of ALL the player's games in this role; 0.2 (one of five roles) is neutral. A 60%-jungle main gets ~+0.05 in jungle and a small penalty elsewhere (`ROLE_COMFORT_WEIGHT`) |
+For a player on a champion in an assigned role:
 
-```
-indScore = wr + masteryBonus − offRolePenalty + roleComfort
-```
-
----
-
-## 2. Draft matchup nudge — `dAdj(champ, role)` (draft mode only)
-
-For each enemy pick that might lane against this champ:
-
-```
-edge = (0.5 − enemyWRvsUs) × play/(play + 50)      shrink by sample
-edge = clamp(edge, ±MATCHUP_CAP)                    MATCHUP_CAP = 0.03
-adj += laneProbability × edge
+```text
+effectiveGames = roleGames + offRoleWeight × (championGames − roleGames)
+effectiveWins  = roleWins  + offRoleWeight × (championWins − roleWins)
+shrunkRecord   = (effectiveWins + 10 × prior) / (effectiveGames + 10)
 ```
 
-- Matchup records come from OP.GG counter tables via the worker's `/counters`
-  endpoint (KV-cached a day); a record needs **≥20 games** to count.
-- `laneProbability` is `laneDist()`: the enemy champ's meta-viable lanes
-  (≥10% role rate) weighted by how often it goes there, so a flex Yasuo
-  splits its weight across mid/top/bot instead of betting on one lane. A
-  manual lane tag on the enemy chip collapses this to certainty, and lanes
-  claimed by other enemy picks are eliminated first.
-- Each lane opponent contributes at most ±3pp, before the lane-probability
-  weighting shrinks it further.
+Off-role weight is 0.3 normally and 0.15 with Role WR enabled. Ten effective
+personal games give the personal record and meta prior equal weight.
 
-Separately, `hardCounters()` flags enemies with ≥50% odds of being in the lane
-that beat the champ ≥55% of the time (20+ games). **That flag never changes
-the score** — it raises a Swap/Keep prompt, and the champ only leaves the
-pick pool if the player opts in.
+The prior is OP.GG's current-patch NA Emerald+ Solo/Duo champion win rate in
+the assigned role when at least 100 meta games are available. Missing role
+coverage falls back to the champion's overall win rate; missing champion data
+falls back to 50%. No extra penalty is applied merely because the source omits
+a lane. Cards label each fallback. Role viability is a separate eligibility
+preference, not inferred from that fallback alone.
 
----
+Both local fetch and worker explicitly request the configured tier, defaulting
+to `emerald_plus`. Exact `emerald` is a different population. Flex-only changes
+personal records, not the Solo/Duo meta source. The UI shows the statistical
+patch and analysis timestamp separately from personal-data freshness.
 
-## 3. Synergy — pairwise adjustments in `compScore`
-
-Two independent terms, summed over all 10 pairs in the comp. Both use heavier
-shrinkage than the individual term because pair samples are tiny — duos at
-`K_PAIR = 20`, champ pairs at `K_CHAMP_PAIR = 100` — both are scaled by
-`SYNERGY_WEIGHT = 0.5`, and both carry an extra confidence ramp
-`g / (g + 10)` so a 2-game record moves the needle far less than a 20-game one.
-
-### Champ-pair synergy — `champPairAdj`
-
-**Pilot-attributed**: only games where these two *players* piloted these two
-*champions* on the same team count (built in `mergeMatch` /
-`build_seed.py`; pairs need ≥2 games to be served at all). The record is
-measured against an expected WR — the mean of the two champs' individual meta
-win rates — so plain champion strength isn't double-counted as "synergy":
-
-```
-expected = (metaWR(a) + metaWR(b)) / 2
-adj = (shrunk(wins, games, 100, expected) − expected) × 0.5 × games/(games + 10)
+```text
+individualScore = shrunkRecord − offRolePenalty + roleComfort
 ```
 
-`K_CHAMP_PAIR = 100` (spec §3a) is deliberately heavy: every champ-pair row in
-the current data sits at 2–8 games, and a 5-stack's ten pair rows re-count the
-same few games — before the damping, one 6-game win streak on one comp summed
-to +12pp of "synergy" and dominated the optimizer. At 100 phantom games the
-term is near-silent until a pairing has real evidence (~100 shared games for
-half weight).
+The off-role penalty remains 0.04 when the player has champion history but
+less than 25% is in this role. This is a heuristic needing ablation validation.
 
-> **Known weakness**: with the personal term damped, no meta-level pair signal
-> replaces it yet. [META_SYNERGY_SPEC.md](META_SYNERGY_SPEC.md) specs adding
-> OP.GG's champion-pair synergy stats as the prior (spec only, not implemented).
+Mastery contributes **zero additive points**. It remains an explicit eligibility
+filter and familiarity readout. Removing a universal +3-point bonus avoids
+assuming mastery adds predictive value beyond the player's observed record.
 
-### Player-pair (duo) synergy — `playerPairAdj`
+## Role comfort
 
-The two players' shared-game record vs a flat 50% expectation, role-weighted
-like `indScore`: shared games in exactly this role combo (e.g. this player
-jungle + that player mid) count fully, their other shared games at 0.3 (0 in
-strict mode). It also carries `PAIR_OVERLAP_DISCOUNT = 0.25`:
-
-```
-adj = (shrunk(w, g, 20) − 0.5) × 0.5 × 0.25 × g/(g + 10)
+```text
+n = total observed role-assigned games for this player in the selected queue view
+share = fraction played in this role
+roleComfort = 0.12 × (share − 0.2) × n / (n + 20)
 ```
 
-The 0.25 exists because the ten duo records in a 5-stack largely re-count the
-**same games** — summing them would multiply one shared win streak ~10×; the
-discount makes ten fully-overlapping pairs count the group's record roughly
-once.
+The sample-size factor prevents a tiny history from receiving the full
+role-share adjustment. It is not a calibrated confidence interval. The
+unshrunk limit remains +9.6 points for an exclusively single-role player, so
+comfort still needs evaluation against a no-comfort baseline.
 
----
+## Draft matchup residual
 
-## 4. What gates a pick without weighing it
+For each possible lane opponent with at least 20 matchup games:
 
-`candidates()` filters before scoring ever ranks:
+```text
+p = our champion's role-meta win rate
+q = enemy champion's role-meta win rate
+expected = p × (1−q) / (p × (1−q) + q × (1−p))
+residual = (observedWinRateAgainstEnemy − expected) × games / (games + 50)
+adjustment += laneProbability × clamp(residual, −0.03, +0.03)
+```
 
-- **Hard filters** — mastery range (default floor 30k points), games-played
-  range, and draft availability (bans, enemy picks, fearless-session champs,
-  champs locked by another ally, champs the player agreed to draft around
-  after a hard-counter flag). Outside these a champ is simply not a pick.
-  Fearless-session champs come from comp matching: a finished flex game in
-  the rolling last 6 hours whose five players and champs exactly match a
-  current top-10 comp (general or No-repeats list) locks those five
-  champions out until the game ages past the window. Match verdicts are
-  cached per match id, so a list shifting under new filters never
-  un-excludes a comp already played.
-- **Role viability** (`roleViable`) — the champ must have a real personal
-  sample in the role (≥10 games) or real meta presence there (≥100 games and
-  ≥10% role rate). Soft: the candidate list degrades tier by tier rather than
-  going empty — *viable + ≥5 games played* first, then *viable*, then
-  anything eligible. In strict mode "played" counts in-role games only.
-- A tiny tiebreaker (+`roleShare × 0.02`) nudges candidate *ordering* toward
-  champs the player actually plays in the role; it is not part of the
-  displayed score.
+The expectation uses the difference in standalone champion log odds. It
+centers matchup effects on baseline strength instead of counting every
+above-50% matchup as an extra advantage. This is still a heuristic rather
+than a fitted interaction model. Lane probabilities support flex picks and
+manual role assignments. Counter data is cached by region, tier, patch,
+champion and role.
 
----
+An **Unfavorable matchup estimate** advisory requires a lane probability of at
+least 50%, at least 20 matchup games, a negative shrunk residual, and the upper
+end of a 95% Wilson interval for our observed matchup win rate below the expected
+baseline. That interval covers the observed proportion only: it does not include
+uncertainty in the meta baseline, role assignment or opponent selection.
+A flag alone never changes the score or removes a pick. Explicit bans, enemy
+picks, fearless exclusions and manual avoidance affect availability.
 
-## 5. What never feeds the score
+## Synergy
 
-- **Team profile panel** (damage mix / frontline / CC / shielding from
-  `compute_profiles.py` and the worker's `deriveProfiles`) — advisory shape
-  read-out only.
-- **Hard-counter flags** — prompt only, see §2.
-- **Fearless exclusions, bans, enemy picks** — availability, not weight.
+Pair adjustments remain strongly shrunk and now use a common scale of 0.4,
+down from 0.5. Both positive and negative effects are 20% smaller.
 
----
+Pilot-attributed champion-pair records count only those two players on those
+two champions on the same team:
 
-## Constants reference
+```text
+expected = mean(overall champion meta WRs)
+adj = (shrunk(wins, games, K=100, prior=expected) − expected)
+      × 0.4 × games / (games + 10)
+```
 
-| Constant | Value | Meaning |
-|---|---|---|
-| `K_IND` | 8 | phantom games toward the meta prior, individual WR |
-| `K_PAIR` | 20 | phantom games, duo (player-pair) synergy |
-| `K_CHAMP_PAIR` | 100 | phantom games, pilot champ-pair synergy |
-| `SYNERGY_WEIGHT` | 0.5 | scale on both synergy deviations |
-| `PAIR_OVERLAP_DISCOUNT` | 0.25 | de-duplicates overlapping duo records |
-| `MASTERY_MAX_BONUS` | 0.03 | mastery bonus cap (at 200k points) |
-| `OFF_ROLE_PENALTY` | 0.04 | champ rarely played in this role (<25%) |
-| `OFF_META_PRIOR_PENALTY` | 0.04 | prior haircut when meta doesn't play the champ here |
-| `OFF_ROLE_GAME_WEIGHT` | 0.3 | off-role game weight (0.15 in strict mode) |
-| `ROLE_COMFORT_WEIGHT` | 0.12 | scale on player's role-share deviation from 0.2 |
-| `MIN_CHAMP_GAMES` | 5 | "played" tier threshold in candidates |
-| `OWN_ROLE_VIABLE_GAMES` | 10 | personal games making an off-meta role pickable |
-| `MATCHUP_CAP` | 0.03 | per-lane-opponent matchup cap |
-| `HARD_COUNTER_WR` | 0.55 | flag threshold (prompt only) |
+Player-pair records count games in the assigned role combination fully, and
+other role combinations at 0.3 (zero in strict Role WR mode):
+
+```text
+adj = (shrunk(weightedWins, weightedGames, K=20, prior=0.5) − 0.5)
+      × 0.4 × 0.25 × weightedGames / (weightedGames + 10)
+```
+
+The 0.25 factor reduces overlap among ten pair rows from the same five-stack.
+It does not eliminate correlated evidence or identify causal chemistry. The
+champion-pair expectation also does not control for pilots or assigned roles.
+These limitations remain visible in the review; the prospective log includes
+a no-synergy comparison instead of asserting that synergy improves accuracy.
+
+## Filters and search
+
+The **Games in role** range counts observed player × champion × assigned-role
+games. Both minimum and maximum apply to the active queue view. Weighted
+off-role games do not satisfy this filter. Old all-role slider settings reset
+rather than changing meaning silently.
+
+Mastery and role-game ranges, bans and draft exclusions are hard candidate
+filters. Normal and worst-comp fallbacks stay inside them. A currently chosen
+manual pick can stay visible outside the role-game range with a warning;
+explicit draft locks remain manual constraints.
+
+Role viability prefers a personal role sample of at least ten games or a meta
+role with at least 100 games and 10% role share. Normal search prefers viable
+picks with at least five games, then viable picks, then other eligible picks.
+The last fallback can include off-meta choices. Strict mode uses in-role games
+for the five-game preference; otherwise it uses all champion games.
+
+Both full and assigned-role search consider up to **eight candidates per
+player/role**. Full search uses optimistic branch bounds to avoid unnecessary
+combinations. It reports the best found in that pool, not a global optimum over
+every champion. Role share breaks equal scores lexicographically; it no longer
+adds an undisclosed two-point candidate-order bonus. Worst-comp search remains
+a deliberately limited candidate search too.
+
+Cards show observed role games, effective games, prior source and weight, role
+comfort, off-role penalty and draft residual. Sample labels describe evidence
+size, not statistical certainty. Empty searches identify constrained roles
+where possible and suggest changing filters without relaxing them silently.
+
+## History and evaluation
+
+The worker serializes writes through `StateHub`. Its compact match ledger
+supports rolling expiry and deterministic aggregation under the configured
+queue/window policy. Local fetch, seed and profile scripts use the same policy.
+Legacy aggregates stay marked incomplete during reconstruction; missing games
+and failed requests remain visible rather than being declared complete.
+
+**Record comp** explicitly saves pregame scores and comparison variants in
+local browser storage. **Export records** downloads them. Nothing is uploaded
+automatically. The evaluator requires actual future match outcomes, checks
+identity/composition/queue/timing, avoids duplicate match counts, and reports
+Brier score, log loss, ROC AUC and calibration bins on chronological splits.
+
+Exports retain the separate unclipped component means/sums, raw total, grade
+comparison, up to three one-swap alternatives and optional pregame side. Saved
+alternatives have no observed outcomes. The current-score ablations remove
+terms from the raw total before applying the display clamp. Additional comparisons
+include no matchup, no role penalty, each synergy type removed separately,
+half synergy, 20/40-game prior strengths and a player-record-only baseline.
+These are frozen diagnostic comparisons, not endorsed replacements.
+
+The offline validation script can fit a small regularized logistic model on
+earlier real outcomes and a separate sigmoid calibration on validation data.
+It evaluates held-out outcomes and reports missing-data/readiness failures;
+it does not install fitted weights in the app. A hierarchical model and learned
+pilot-adjusted synergy remain future work. Existing coefficients and new
+alternatives have no claimed accuracy gain without prospective evidence.

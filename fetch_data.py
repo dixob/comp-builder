@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+from history_policy import match_exclusion
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
@@ -334,10 +335,9 @@ def main():
     # Only count matches newer than this — old games say little about current
     # form (the raw match stays cached either way).
     max_age_days = cfg.get("max_match_age_days", 365)
-    cutoff_ms = (time.time() - max_age_days * 86400) * 1000 if max_age_days else 0
+    now_ms = time.time() * 1000
+    matches = [m for m in matches if match_exclusion(m, cfg, now_ms) is None]
     for m in matches:
-        if m["info"].get("gameStartTimestamp", 0) < cutoff_ms:
-            continue
         parts = m["info"]["participants"]
         dur = m["info"]["gameDuration"]
         if dur > 20000:  # pre-11.20 matches report milliseconds
@@ -437,7 +437,10 @@ def main():
         del p["matchIds"]
 
     out = {
-        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+        "history": {"windowDays": max_age_days, "queue": cfg.get("queue"),
+                    "complete": False, "status": "local-fetch-limited",
+                    "matches": len(matches)},
         "ddragonVersion": dd_version,
         "groupTier": group_tier(players),
         "champions": {str(k): v for k, v in champs.items()},

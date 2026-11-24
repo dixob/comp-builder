@@ -5,3 +5,7 @@ data/matches/
 .claude/
 __pycache__/
 .wrangler/
+
+# Local seed/export artifacts; may contain full match histories.
+worker/seed_state.json
+evaluation-output/

@@ -1,6 +1,7 @@
 {
   "api_key": "RGAPI-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
   "platform": "na1",
+  "meta_tier": "emerald_plus",
   "riot_ids": [
     "Player1#NA1",
     "Player2#NA1",

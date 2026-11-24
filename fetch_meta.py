@@ -6,6 +6,8 @@ Usage: python3 fetch_meta.py
 """
 import json
 import urllib.request
+import urllib.parse
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -16,27 +18,13 @@ OPGG_REGION = {"na1": "na", "euw1": "euw", "eun1": "eune", "kr": "kr", "br1": "b
                "jp1": "jp", "oc1": "oce", "tr1": "tr", "ru": "ru", "la1": "lan", "la2": "las"}
 
 
-def group_tier():
-    """Median rank of the group, written by fetch_data.py. A champion's win
-    rate in Emerald is not its win rate in Bronze, so the prior every pick is
-    shrunk toward should come from the slice of the ladder these players are
-    actually in — not the all-ranks average."""
-    players = ROOT / "data" / "players.json"
-    if not players.exists():
-        return None
-    return json.loads(players.read_text()).get("groupTier")
-
-
 def main():
     cfg = json.loads((ROOT / "config.json").read_text())
     region = OPGG_REGION.get(cfg["platform"], "na")
-    # config wins, then the group's median rank. With neither, send no tier at
-    # all: OP.GG's default slice is not the same as tier=all (2.1M games vs
-    # 10.7M), so defaulting to "all" would quietly move every prior.
-    tier = (cfg.get("meta_tier") or group_tier() or "").lower()
-    url = f"https://lol-api-champion.op.gg/api/{region}/champions/ranked"
-    if tier:
-        url += f"?tier={tier}"
+    # OP.GG distinguishes exact Emerald (emerald) from Emerald+ (emerald_plus).
+    # Match the live worker's default rather than inferring a rank slice.
+    tier = (cfg.get("meta_tier") or "emerald_plus").lower()
+    url = f"https://lol-api-champion.op.gg/api/{region}/champions/ranked?tier={urllib.parse.quote(tier)}"
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req) as r:
         raw = json.load(r)
@@ -68,6 +56,7 @@ def main():
         "tier": tier,
         "matchCount": raw["meta"].get("match_count"),
         "analyzedAt": raw["meta"].get("analyzed_at"),
+        "fetchedAt": datetime.now(timezone.utc).isoformat(),
         "champions": champs,
     }
     (ROOT / "data").mkdir(exist_ok=True)

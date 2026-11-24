@@ -20,6 +20,7 @@ import json
 import time
 from collections import defaultdict
 from pathlib import Path
+from history_policy import match_exclusion, compact_match
 
 ROOT = Path(__file__).parent
 
@@ -39,7 +40,7 @@ def main():
     # Only count matches newer than this — old games say little about current
     # form, and champ game counts should reflect roughly the current season.
     max_age_days = cfg.get("max_match_age_days", 365)
-    cutoff_ms = (time.time() - max_age_days * 86400) * 1000 if max_age_days else 0
+    now_ms = time.time() * 1000
     src = json.loads((ROOT / "data" / "players.json").read_text())
     meta_path = ROOT / "data" / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
@@ -52,8 +53,7 @@ def main():
         p["riotId"]: {
             "profileIconId": p.get("profileIconId"),
             "mastery": p["mastery"],
-            # rank as of the last fetch_data.py run — the worker never calls
-            # league-v4, so this goes stale until the next reseed
+            # Start with the last fetched rank; live refresh updates it later.
             "ranks": p.get("ranks"),
             "champs": {}, "queues": {},
         }
@@ -83,13 +83,16 @@ def main():
             row["name"] = p.get("riotIdGameName") or p.get("summonerName") or "?"
         return row
 
-    skipped_old = 0
+    excluded = {}
+    ledger = {}
     for f in sorted(glob.glob(str(ROOT / "data" / "matches" / "*.json"))):
         m = json.loads(Path(f).read_text())
-        if m["info"].get("gameStartTimestamp", 0) < cutoff_ms:
-            skipped_old += 1
+        reason = match_exclusion(m, cfg, now_ms)
+        if reason:
+            excluded[m.get("metadata", {}).get("matchId", Path(f).stem)] = reason
             continue
         processed.append(m["metadata"]["matchId"])
+        ledger[m["metadata"]["matchId"]] = compact_match(m)
         parts = m["info"]["participants"]
 
         dur = m["info"]["gameDuration"]
@@ -205,11 +208,15 @@ def main():
     state = {
         "config": {
             "platform": cfg["platform"],
+            "metaTier": (cfg.get("meta_tier") or "emerald_plus").lower(),
             "queue": cfg.get("queue"),
+            "maxMatchAgeDays": max_age_days,
             "riotIds": [{"riotId": p["riotId"], "puuid": p["puuid"],
                          "puuids": p.get("puuidHistory", [p["puuid"]])}
                         for p in src["players"]],
         },
+        "history": {"version": 1, "complete": True, "matches": ledger,
+                    "excluded": excluded, "source": "local-cache"},
         "players": players,
         "stacks": sorted(stacks, key=lambda g: -g["ts"]),
         "playerPairs": dict(player_pairs),
@@ -224,7 +231,7 @@ def main():
     out = ROOT / "worker" / "seed_state.json"
     out.write_text(json.dumps(state))
     print(f"Wrote {out.relative_to(ROOT)} — {len(processed)} matches "
-          f"({skipped_old} older than {max_age_days}d skipped), "
+          f"({len(excluded)} excluded by queue/window/validity policy), "
           f"{len(players)} players, {len(champ_pairs)} champ pairs, "
           f"{len(stacks)} five-stacks, {out.stat().st_size // 1024} KB.")
 

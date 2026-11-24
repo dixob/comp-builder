@@ -25,3 +25,12 @@ class_name = "DraftHub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DraftHub"]
+
+# Authoritative owner for roster/history/meta updates. KV is read-only publication.
+[[durable_objects.bindings]]
+name = "STATE"
+class_name = "StateHub"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["StateHub"]

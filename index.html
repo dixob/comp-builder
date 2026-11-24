@@ -1106,7 +1106,7 @@
     <div class="patchbar" id="sub"><span class="chip">Loading account data…</span></div>
     <button id="refreshBtn" class="btn" hidden title="Pull the group's newest games"><span class="spin">⟳</span> Refresh</button>
     <button id="flexToggle" class="btn toggle" hidden title="Score and display using flex-queue games only">Flex only</button>
-    <button id="roleToggle" class="btn toggle" title="Champion win rates count only games played in the assigned role">Role WR</button>
+    <button id="roleToggle" class="btn toggle" title="Emphasize games in the assigned role; off-role champion games still contribute at reduced weight">Role WR</button>
   <button id="draftToggle" class="btn toggle" title="Draft assist: bans and enemy picks filter the board (auto-synced when lcu_bridge.py runs)">Draft</button>
     <button id="themeToggle" class="btn toggle" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">◐</button>
   </header>
@@ -1142,21 +1142,21 @@ const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot",
 // Synergy: pilot-attributed champ-pair WR deviation vs the pair's expected
 // meta WR (only games where these two PLAYERS piloted these two champs on the
 // same team), plus player-pair (duo) WR deviation vs 50%.
-const K_IND = 8;        // shrinkage prior weight for individual champ WR
+const K_IND = 10;        // shrinkage prior weight for individual champ WR
 const K_PAIR = 20;      // shrinkage for duo (player-pair) stats — real samples, median ~40 games
 // Pilot-attributed champ pairs are all tiny samples (5-8 games at best), and a
 // 5-stack's ten pair rows re-count the SAME few games — one win streak on one
 // comp showed up as +12pp of "synergy". ~100 shared games for half weight
 // keeps the term honest: it stays near-silent until a pairing has real evidence.
 const K_CHAMP_PAIR = 100;
-const MASTERY_MAX_BONUS = 0.03;  // up to +3% for very high mastery
-const SYNERGY_WEIGHT = 0.5;      // how much a pair's WR deviation counts
+const MASTERY_MAX_BONUS = 0; // familiarity gates picks; no unvalidated score bonus
+const SYNERGY_WEIGHT = 0.4;      // how much a pair's WR deviation counts
 // The ten duo records in a 5-stack largely re-count the SAME games, so summing
 // them multiplies one shared win streak ~10x. This scales the sum back so ten
 // fully-overlapping pairs count the group's record roughly once.
 const PAIR_OVERLAP_DISCOUNT = 0.25;
 const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
-const OFF_META_PRIOR_PENALTY = 0.04; // champ has no meta presence in this role (e.g. Annie bot)
+const OFF_META_PRIOR_PENALTY = 0; // champ has no meta presence in this role (e.g. Annie bot)
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
 // Strict mode halves that instead of zeroing it: a 1W-5L mid record is still
 // evidence about how the player pilots the champ, and zero weight let a champ
@@ -1164,6 +1164,9 @@ const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a 
 // data") while a real bad in-role record counted fully against its rival.
 const OFF_ROLE_GAME_WEIGHT_STRICT = 0.15;
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
+const ROLE_COMFORT_PRIOR = 20;     // shrink role share for small histories
+const SEARCH_CANDIDATES = 8;       // shared bounded pool for full/fixed-role search
+const MODEL_VERSION = "2026-11-24.3";
 const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actually logged games on
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
@@ -1187,13 +1190,14 @@ const MASTERY_OFF = 200000;
 let masteryMin = +(localStorage.getItem("masteryFloor") ?? 30000);
 let masteryMax = +(localStorage.getItem("masteryMax") ?? MASTERY_OFF);
 const inMasteryRange = pts => pts >= masteryMin && (masteryMax >= MASTERY_OFF || pts <= masteryMax);
-// Games-played range: champs outside [minGames, maxGames] total ranked games
-// are filtered from candidate lists — too few games means the record is
-// noise, too many means the pick is predictable/bannable. A max slider at
-// MAX_GAMES_OFF means no upper cap.
+// Games-in-role range: count only this champion in the assigned role, in
+// the selected queue view. Neither strict scoring nor fallback tiers can
+// relax this filter. New storage keys avoid reinterpreting total-game limits.
+// A max slider at MAX_GAMES_OFF means no upper cap.
 const MAX_GAMES_OFF = 31;  // slider runs 0–30; the top notch means no ceiling
-let minGames = Math.min(+(localStorage.getItem("minGames") ?? 0), MAX_GAMES_OFF - 1);
-let maxGames = +(localStorage.getItem("maxGames") ?? MAX_GAMES_OFF);
+let minGames = Math.min(+(localStorage.getItem("minRoleGames") ?? 0), MAX_GAMES_OFF - 1);
+let maxGames = +(localStorage.getItem("maxRoleGames") ?? MAX_GAMES_OFF);
+const roleGames = (entry, role) => entry?.roles?.[role]?.games || 0;
 const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
 // Strict role WRs: the in-role record dominates a champion's score and the
 // candidate "played" tier counts only in-role games; off-role games still
@@ -1299,9 +1303,8 @@ function playerRoleShare(riotId, role) {
   return shares.total ? (shares[role] || 0) / shares.total : 0.2;
 }
 
-// Current-patch meta win rate for a champion in a role. If the champ simply
-// isn't played in that role on this patch, its overall WR is a bad prior —
-// apply the off-meta penalty instead of pretending role doesn't matter.
+// Current-patch role prior. Missing role coverage is not proof of a bad pick;
+// fall back to overall champion data, clearly labelled, without a flat penalty.
 const OPGG_POS = { TOP: "TOP", JUNGLE: "JUNGLE", MIDDLE: "MID", BOTTOM: "ADC", UTILITY: "SUPPORT" };
 function metaWR(champId, role) {
   const m = META && META.champions[champId];
@@ -1309,8 +1312,33 @@ function metaWR(champId, role) {
   const pos = role && m.positions[OPGG_POS[role]];
   if (pos && pos.games >= 100) return pos.winRate;
   const base = m.winRate ?? 0.5;
-  if (role && Object.keys(m.positions).length) return base - OFF_META_PRIOR_PENALTY;
   return base;
+}
+
+function metaSource(champId, role) {
+  const m = META?.champions?.[champId];
+  if (m?.positions?.[OPGG_POS[role]]?.games >= 100) return "observed role meta";
+  return m?.winRate != null ? "overall-champion fallback; role coverage missing" : "neutral fallback; no meta record";
+}
+
+function priorSource(champId, role) {
+  const m = META?.champions?.[champId];
+  return m?.positions?.[OPGG_POS[role]]?.games >= 100 ? "role"
+    : m?.winRate != null ? "overall" : "neutral";
+}
+
+function roleComfort(riotId, role) {
+  const share = playerRoleShare(riotId, role);
+  const n = roleShareCache[riotId]?.total || 0;
+  return ROLE_COMFORT_WEIGHT * (share - 0.2) * n / (n + ROLE_COMFORT_PRIOR);
+}
+
+// Baseline matchup expectation from each champion's standalone strength.
+// The residual remains a heuristic, not an independently fitted causal effect.
+function expectedMatchupWR(ours, enemy, role) {
+  const clamp = p => Math.max(0.01, Math.min(0.99, p));
+  const a = clamp(metaWR(ours, role)), b = clamp(metaWR(enemy, role));
+  return (a * (1 - b)) / (a * (1 - b) + b * (1 - a));
 }
 
 // Where an enemy pick is likely headed: its meta-viable lanes (≥10% role
@@ -1388,18 +1416,20 @@ function ensureCounters(cid, role) {
   if (!role || !WORKER_URL) return;
   const key = cid + "|" + OPGG_POS[role];
   if (counterIdx[key]) return;
-  counterIdx[key] = {};  // placeholder so a slow response isn't refetched
+  const pending = counterIdx[key] = {};  // identity protects against stale responses
   fetch(`${WORKER_URL}/counters?champ=${cid}&pos=${OPGG_POS[role]}`)
     .then(r => r.ok ? r.json() : null)
     .then(j => {
-      if (!j || !j.counters) return;
+      if (counterIdx[key] !== pending) return;
+      if (!j || !j.counters || (j.patch && META?.patch && j.patch !== META.patch)
+          || (j.tier && META?.tier && j.tier !== META.tier)) { delete counterIdx[key]; return; }
       const map = {};
       for (const c of j.counters) map[c.champion_id] = c;
       counterIdx[key] = map;
       noteEvent(champName(cid) + " matchups loaded");
       draftChanged(false);
     })
-    .catch(() => {});
+    .catch(() => { if (counterIdx[key] === pending) delete counterIdx[key]; });
 }
 
 // Matchup record for our champ vs an enemy in a lane. OP.GG's counter table
@@ -1411,6 +1441,22 @@ function matchupRec(ecid, cid, role) {
   if (direct) return direct;
   const rev = (counterIdx[cid + "|" + OPGG_POS[role]] || {})[ecid];
   return rev ? { play: rev.play, win: rev.play - rev.win } : null;
+}
+
+// Wilson bounds describe the observed matchup proportion only. They do not
+// include uncertainty in the meta baseline, opponent selection or role guesses.
+function matchupEvidence(cid, ecid, role) {
+  const rec = matchupRec(ecid, cid, role);
+  if (!rec || rec.play < 20) return null;
+  const n = rec.play, observed = 1 - rec.win / n;
+  const expected = expectedMatchupWR(cid, ecid, role);
+  const residual = (observed - expected) * n / (n + 50) * MATCHUP_WEIGHT;
+  const z = 1.959963984540054, z2 = z * z, den = 1 + z2 / n;
+  const center = (observed + z2 / (2 * n)) / den;
+  const half = z * Math.sqrt(observed * (1 - observed) / n + z2 / (4 * n * n)) / den;
+  return { games:n, observed, expected, residual,
+    adjustment:Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, residual)),
+    lower:center-half, upper:center+half };
 }
 
 // Matchup nudge for playing champ `cid` in `role` into the enemy picks that
@@ -1425,20 +1471,16 @@ function dAdj(cid, role) {
   for (const ecid of effEnemy()) {
     const w = laneDist(ecid)[role] || 0;
     if (!w) continue;
-    const rec = matchupRec(ecid, cid, role);
-    if (!rec || rec.play < 20) continue;
-    const edge = (0.5 - rec.win / rec.play) * (rec.play / (rec.play + 50)) * MATCHUP_WEIGHT;
-    adj += w * Math.max(-MATCHUP_CAP, Math.min(MATCHUP_CAP, edge));
+    const evidence = matchupEvidence(cid, ecid, role);
+    if (!evidence) continue;
+    adj += w * evidence.adjustment;
   }
   return dAdjCache[k] = adj;
 }
 
-// Hard-counter flag: enemy picks likely in this lane (≥50% lane odds) that
-// beat the champ ≥55% of the time in the meta (20+ games). This never swaps
-// the pick by itself — the score card raises a Swap/Keep prompt and the champ
-// only leaves the optimizer's menu once the player opts into the swap
-// (counterAvoid); Keep dismisses the prompt for that champ+enemies combo.
-const HARD_COUNTER_WR = 0.55;
+// Conservative advisory screen: likely lane (≥50%), 20+ games, and the
+// observed matchup's upper Wilson bound below its baseline expectation.
+// This never changes a pick without the user's Swap action.
 let counterAvoid = new Set();      // cids the player agreed to draft around
 let counterDismissed = new Set();  // "cid|enemies" prompts the player declined
 function hardCounters(cid, role) {
@@ -1446,8 +1488,8 @@ function hardCounters(cid, role) {
   const out = [];
   for (const ecid of effEnemy()) {
     if ((laneDist(ecid)[role] || 0) < 0.5) continue;
-    const rec = matchupRec(ecid, cid, role);
-    if (rec && rec.play >= 20 && rec.win / rec.play >= HARD_COUNTER_WR) out.push(ecid);
+    const evidence = matchupEvidence(cid, ecid, role);
+    if (evidence && evidence.residual < 0 && evidence.upper < evidence.expected) out.push(ecid);
   }
   return out;
 }
@@ -1489,7 +1531,7 @@ function indScore(riotId, champId, role) {
     wr = prior;
   }
   const rolePen = entry && roleShare(entry, role) < 0.25 ? OFF_ROLE_PENALTY : 0;
-  const comfort = ROLE_COMFORT_WEIGHT * (playerRoleShare(riotId, role) - 0.2);
+  const comfort = roleComfort(riotId, role);
   return indCache[ck] = wr + masteryBonus(riotId, champId) - rolePen + comfort;
 }
 
@@ -1543,15 +1585,16 @@ function playerPairAdj(a, ra, b, rb) {
 
 // Full comp score: mean individual + all pairwise synergy adjustments.
 function compScore(assign) {  // assign: [{player, champ, role}]
-  let ind = 0, syn = 0;
+  let ind = 0, champSyn = 0, playerSyn = 0;
   for (const a of assign) ind += slotScore(a.player, a.champ, a.role);
   ind /= assign.length;
   for (let i = 0; i < assign.length; i++)
     for (let j = i + 1; j < assign.length; j++) {
-      syn += champPairAdj(assign[i], assign[j]);
-      syn += playerPairAdj(assign[i].player, assign[i].role, assign[j].player, assign[j].role);
+      champSyn += champPairAdj(assign[i], assign[j]);
+      playerSyn += playerPairAdj(assign[i].player, assign[i].role, assign[j].player, assign[j].role);
     }
-  return { total: Math.max(0.05, Math.min(0.95, ind + syn)), ind, syn };
+  const syn = champSyn + playerSyn, rawTotal = ind + syn;
+  return { total: Math.max(0.05, Math.min(0.95, rawTotal)), rawTotal, ind, syn, champSyn, playerSyn };
 }
 
 // A champion is pickable for (player, role) only if the current meta plays it
@@ -1567,7 +1610,7 @@ function roleViable(champEntry, champId, role) {
 }
 
 // Top champion candidates for a player in a role.
-function candidates(riotId, role, n = 3) {
+function candidates(riotId, role, n = SEARCH_CANDIDATES) {
   const ck = riotId + "|" + role + "|" + n;
   if (ck in candCache) return candCache[ck];
   const p = D.players.find(p => p.riotId === riotId);
@@ -1576,10 +1619,11 @@ function candidates(riotId, role, n = 3) {
   for (const m of p.mastery.slice(0, 12)) if (!pool.has(m.championId)) pool.set(m.championId, null);
   const scored = [...pool.keys()].map(cid => ({
     cid,
-    s: slotScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    s: slotScore(riotId, cid, role),
+    roleShare: roleShare(pool.get(cid), role),
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
-    inRange: inGamesRange((pool.get(cid) || {}).games || 0),
+    inRange: inGamesRange(roleGames(pool.get(cid), role)),
     avail: !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid, role)
       && !uniqueExclude.has(riotId + "|" + cid),
     // in strict Role WR mode "played" means played IN THIS ROLE — a champ
@@ -1599,8 +1643,185 @@ function candidates(riotId, role, n = 3) {
     eligible.filter(c => c.viable),
     eligible,
   ];
-  const list = (tiers.find(t => t.length) || []).sort((a, b) => b.s - a.s);
+  const list = (tiers.find(t => t.length) || []).sort((a, b) => b.s - a.s || b.roleShare - a.roleShare || a.cid - b.cid);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
+}
+
+const completeComposition = assign => assign.length === 5
+  && assign.every(a => a.player && a.champ && ROLES.includes(a.role))
+  && new Set(assign.map(a=>a.player)).size === 5
+  && new Set(assign.map(a=>a.champ)).size === 5
+  && new Set(assign.map(a=>a.role)).size === 5;
+const historyCompleteness = () => typeof D.history?.complete === "boolean" ? D.history.complete : null;
+const replacementOrder = (a,b) => b.rankScore-a.rankScore
+  || ROLES.indexOf(a.role)-ROLES.indexOf(b.role) || a.cid-b.cid;
+
+// One consistent recommendation objective for draft answers and local grades.
+// The candidate pool is bounded; this is not a global composition search.
+function replacementRecommendations(assign, role) {
+  const i = assign.findIndex(a=>a.role===role), current = assign[i];
+  if (!current?.player || allyLocked(role,current.champ)) return [];
+  const full = completeComposition(assign), baseline = full ? compScore(assign) : null;
+  const used = new Set(assign.filter((_,j)=>j!==i).map(a=>a.champ).filter(Boolean));
+  return candidates(current.player,role,15)
+    .filter(cid=>cid!==current.champ && !used.has(cid) && !draftUnavailable(cid))
+    .map(cid=>{
+      const comp = assign.map((a,j)=>({...a,champ:j===i?cid:a.champ}));
+      const score = full ? compScore(comp) : null;
+      const rankScore = score ? score.rawTotal : slotScore(current.player,cid,role);
+      return {cid,role,comp,score,rankScore,full,delta:baseline?rankScore-baseline.rawTotal:null};
+    }).sort(replacementOrder);
+}
+
+function singleSwapComparison(assign) {
+  const scope = "Same players and roles; up to 15 filtered candidates per unlocked slot. Comparison uses model points before display limits.";
+  if (!completeComposition(assign)) return {status:"incomplete",label:"Complete the composition",scope,alternatives:[]};
+  const current = compScore(assign);
+  const lockedSlots = assign.filter(a=>allyLocked(a.role,a.champ)).length;
+  const alternatives = assign.flatMap(a=>replacementRecommendations(assign,a.role)).sort(replacementOrder);
+  const improvement = alternatives.length ? Math.max(0,alternatives[0].rankScore-current.rawTotal) : 0;
+  // Half of a displayed tenth of a point: avoid announcing invisible gains.
+  const improves = improvement >= 0.0005;
+  const status = lockedSlots===5 ? "locked" : !alternatives.length ? "no_alternatives" : improves ? "improvement" : "best_checked";
+  const label = status==="locked" ? "All picks locked"
+    : status==="no_alternatives" ? "No legal single swaps found"
+    : improves ? `+${(improvement*100).toFixed(1)} pts available in one swap` : "Best among checked single swaps";
+  const minRoleGames = Math.min(...assign.map(a=>pickEvidence(a.player,a.champ,a.role).roleGames));
+  const historyComplete = historyCompleteness();
+  return {status,label,scope,lockedSlots,checkedAlternatives:alternatives.length,
+    improvementPoints:improvement*100,currentRawTotal:current.rawTotal,
+    bestRawTotal:Math.max(current.rawTotal,alternatives[0]?.rankScore??current.rawTotal),
+    evidence:{minRoleGames,historyComplete,
+      label:(minRoleGames<5?"Limited role evidence":minRoleGames<20?"Some role evidence":"Larger role sample")
+        +(historyComplete?"":" · history incomplete or unverified")},alternatives};
+}
+
+// Inspectable evidence behind a recommendation; sample labels are not confidence intervals.
+function pickEvidence(riotId, champId, role) {
+  const p = D.players.find(p => p.riotId === riotId);
+  const entry = p.champions.find(c => c.championId === champId);
+  const rec = entry?.roles?.[role] || {games:0,wins:0};
+  const offW = strictRole ? OFF_ROLE_GAME_WEIGHT_STRICT : OFF_ROLE_GAME_WEIGHT;
+  const g = rec.games + ((entry?.games || 0) - rec.games) * offW;
+  const w = rec.wins + ((entry?.wins || 0) - rec.wins) * offW;
+  const playerGames = p.champions.reduce((sum,c)=>sum+c.games,0);
+  const playerWins = p.champions.reduce((sum,c)=>sum+c.wins,0);
+  return {riotId,championId:champId,role,roleGames:rec.games,roleWins:rec.wins,
+    effectiveGames:g,effectiveWins:w,playerGames,playerWins,prior:metaWR(champId,role),priorWeight:K_IND/(g+K_IND),
+    priorSource:priorSource(champId,role),
+    source:metaSource(champId,role),shrunkPersonal:shrunk(w,g,K_IND,metaWR(champId,role)),
+    comfort:roleComfort(riotId,role),rolePenalty:entry && roleShare(entry,role)<.25?OFF_ROLE_PENALTY:0,
+    matchup:dAdj(champId,role),masteryPoints:masteryIdx[riotId]?.[champId]||0};
+}
+
+function evidenceHTML(e) {
+  const sample = e.roleGames < 5 ? "Limited role evidence" : e.roleGames < 20 ? "Some role evidence" : "Larger role sample";
+  const points = n => `${n>=0?"+":""}${(n*100).toFixed(1)} pts`;
+  return `<details style="margin-top:8px"><summary>Why this pick · ${sample}</summary>
+    <div class="dim">${e.roleGames} observed role games · ${e.effectiveGames.toFixed(1)} weighted games<br>
+    Prior: ${pct(e.prior)} · ${pct(e.priorWeight)} of the shrunk record<br>${e.source}<br>
+    Role comfort ${points(e.comfort)} · role penalty ${points(-e.rolePenalty)}<br>
+    Matchup residual ${points(e.matchup)} · mastery used for eligibility<br>
+    Evidence labels describe sample size, not a calibrated confidence level.</div></details>`;
+}
+
+function emptyPoolMessage() {
+  const assigned = activeTab === "assigned";
+  const pool = D.players.filter(p => included[p.riotId]);
+  if (!assigned && pool.length < 5) return "Select at least five players.";
+  const blocked = ROLES.flatMap((role,i) => {
+    const players = assigned ? pool.filter(p => p.riotId === slots[i].player) : pool;
+    if (players.some(p => candidates(p.riotId,role,1).length)) return [];
+    return [assigned && slots[i].player ? `${esc(slots[i].player.split("#")[0])} · ${ROLE_LABEL[role]}` : ROLE_LABEL[role]];
+  });
+  const reason = blocked.length ? `No eligible picks for ${blocked.join(", ")}.` : "No distinct five-champion comp meets these filters and locks.";
+  return `${reason} Lower the games-in-role minimum or mastery floor, widen the maximum, or change a player/lock. Filters have not been relaxed automatically.`;
+}
+
+const PREDICTION_KEY = "compy.predictions.v1";
+function savedPredictions() {
+  const raw = localStorage.getItem(PREDICTION_KEY);
+  if (!raw) return [];
+  const records = JSON.parse(raw);
+  if (!Array.isArray(records)) throw new Error("Saved records are not a valid list; export or back them up before recording.");
+  return records;
+}
+
+// Original pre-review model is retained only as a prospective comparison baseline.
+function previousSlotScore(riotId, cid, role) {
+  const e = D.players.find(p=>p.riotId===riotId).champions.find(c=>c.championId===cid);
+  const rr=e?.roles?.[role]||{games:0,wins:0}, off=strictRole ? .15 : .3;
+  const g=rr.games+((e?.games||0)-rr.games)*off, w=rr.wins+((e?.wins||0)-rr.wins)*off;
+  const m=META?.champions?.[cid], pos=m?.positions?.[OPGG_POS[role]];
+  const prior=pos?.games>=100?pos.winRate:m?(m.winRate??.5)-(role&&Object.keys(m.positions||{}).length ? .04 : 0):.5;
+  let matchup=0;
+  if(draftMode)for(const enemy of effEnemy()) {
+    const rec=matchupRec(enemy,cid,role);if(!rec||rec.play<20)continue;
+    const edge=(.5-rec.win/rec.play)*rec.play/(rec.play+50)*MATCHUP_WEIGHT;
+    matchup+=(laneDist(enemy)[role]||0)*Math.max(-MATCHUP_CAP,Math.min(MATCHUP_CAP,edge));
+  }
+  return shrunk(w,g,8,prior)+Math.min(masteryIdx[riotId]?.[cid]||0,200000)/200000*.03
+    -(e&&roleShare(e,role)<.25 ? .04 : 0)+ROLE_COMFORT_WEIGHT*(playerRoleShare(riotId,role)-.2)+matchup;
+}
+
+function predictionRecord(assign, capturedAt = new Date().toISOString(), side = null) {
+  if(!completeComposition(assign) || assign.some(a=>draftUnavailable(a.champ)))
+    throw new Error("Choose five distinct players and available champions before recording.");
+  if(side!==null && side!==100 && side!==200) throw new Error("Choose unknown, blue or red side.");
+  const evidence=assign.map(a=>pickEvidence(a.player,a.champ,a.role));
+  const score=compScore(assign), mean=arr=>arr.reduce((a,b)=>a+b,0)/arr.length;
+  const clip=n=>Math.max(.05,Math.min(.95,n));
+  const components={personal:mean(evidence.map(e=>e.shrunkPersonal)),meta:mean(evidence.map(e=>e.prior)),
+    player:mean(evidence.map(e=>shrunk(e.playerWins,e.playerGames,K_IND,.5))),
+    comfort:mean(evidence.map(e=>e.comfort)),rolePenalty:mean(evidence.map(e=>e.rolePenalty)),
+    matchup:mean(evidence.map(e=>e.matchup)),championSynergy:score.champSyn,playerSynergy:score.playerSyn,rawTotal:score.rawTotal};
+  const withPrior = k => clip(score.rawTotal-components.personal+mean(evidence.map(e=>shrunk(e.effectiveWins,e.effectiveGames,k,e.prior))));
+  const identity = a => {const p=D.players.find(p=>p.riotId===a.player);return {riotId:a.player,championId:a.champ,role:a.role,
+    puuid:p.puuid,puuidHistory:p.puuidHistory||[p.puuid]};};
+  const {alternatives,...gradeComparison}=singleSwapComparison(assign);
+  return {schemaVersion:1,id:`${capturedAt}:${assign.map(a=>a.player+":"+a.champ).join("|")}`,
+    modelVersion:MODEL_VERSION,capturedAt,captureStage:"pregame",side,queue:flexOnly?440:"ranked",
+    comp:assign.map(identity),
+    scores:{current:score.total,previous:clip(mean(assign.map(a=>previousSlotScore(a.player,a.champ,a.role)))+score.syn*.5/SYNERGY_WEIGHT),
+      metaOnly:clip(components.meta),shrunkPersonal:clip(components.personal),playerOnly:clip(components.player),
+      noSynergy:clip(score.ind),noMastery:score.total,noComfort:clip(score.rawTotal-components.comfort),
+      noMatchup:clip(score.rawTotal-components.matchup),noRolePenalty:clip(score.rawTotal+components.rolePenalty),
+      noChampionSynergy:clip(score.rawTotal-score.champSyn),noPlayerSynergy:clip(score.rawTotal-score.playerSyn),
+      priorK20:withPrior(20),priorK40:withPrior(40),synergyHalf:clip(score.ind+score.syn*.5)},
+    components,gradeComparison,
+    alternatives:alternatives.slice(0,3).map(a=>({comp:a.comp.map(identity),scores:{current:a.score.total},rawTotal:a.score.rawTotal})),
+    alternativesNotice:"Unplayed one-swap alternatives have no observed outcome.",
+    evaluationCohort:{historyComplete:historyCompleteness(),historyStatus:D.history?.status||null},
+    settings:{strictRole,minRoleGames:minGames,maxRoleGames:maxGames,masteryMin,masteryMax,draftMode,searchCandidates:SEARCH_CANDIDATES},
+    meta:META?{patch:META.patch,tier:META.tier||null,region:META.region,analyzedAt:META.analyzedAt,fetchedAt:META.fetchedAt}:null,
+    dataGeneratedAt:/[zZ]|[+-]\d{2}:?\d{2}$/.test(D.generatedAt||"") ? D.generatedAt : null,
+    dataGeneratedAtRaw:D.generatedAt,history:D.history||null,evidence,
+    candidates:assign.map(a=>({riotId:a.player,role:a.role,championIds:candidates(a.player,a.role,SEARCH_CANDIDATES)})),
+    opponents:[...effEnemy()].map(championId=>({championId,role:enemyRole.get(championId)||null})),
+    comparisonModels:{previous:"original K=8, synergy=.5, mastery+.03, unshrunk comfort; pre-review fallbacks",current:MODEL_VERSION}};
+}
+
+function recordCurrentComp() {
+  const status=$("#recordStatus");
+  try {
+    const sideSelect=$("#recordSide");
+    const record=predictionRecord(slots.map((s,i)=>({...s,role:ROLES[i]})),new Date().toISOString(),Number(sideSelect?.value)||null);
+    const records=savedPredictions();records.push(record);
+    localStorage.setItem(PREDICTION_KEY,JSON.stringify(records));
+    if(sideSelect) sideSelect.value="";
+    status.textContent=`Recorded before the match: ${records.length} saved locally. Keep only the final intended record for each match in evaluation; exports preserve all saved records.`;
+  } catch(e) {status.textContent=e.message||"Could not save this record. Export existing records before trying again.";}
+}
+
+function exportPredictions() {
+  const status=$("#recordStatus");
+  try {
+    const records=savedPredictions();
+    const blob=new Blob([JSON.stringify({schemaVersion:1,exportedAt:new Date().toISOString(),records},null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob),link=document.createElement("a");
+    link.href=url;link.download="compy-predictions.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    status.textContent=`Exported ${records.length} records. Your saved records remain in this browser.`;
+  } catch(e) {status.textContent=e.message||"Could not export saved records.";}
 }
 
 // --- optimizer -----------------------------------------------------------
@@ -1624,7 +1845,7 @@ function optimizeChamps(topN = 10, fixed = {}) {
   const players = slots.map(s => s.player);
   if (players.some(p => !p) || new Set(players).size !== 5) return null;
   const cands = players.map((rid, i) =>
-    fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i], 8));
+    fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i], SEARCH_CANDIDATES));
   const results = [];
   const idx = [0, 0, 0, 0, 0];
   while (true) {
@@ -1678,33 +1899,38 @@ function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
       let maxIndSum = 0;
       for (const arr of ind) maxIndSum += Math.max(...arr);
       if (maxIndSum / 5 + permPairs + champSynBound <= floor) continue;
-      const idx = [0, 0, 0, 0, 0];
-      while (true) {
-        const c0 = cands[0][idx[0]], c1 = cands[1][idx[1]], c2 = cands[2][idx[2]],
-              c3 = cands[3][idx[3]], c4 = cands[4][idx[4]];
-        if (c0 !== c1 && c0 !== c2 && c0 !== c3 && c0 !== c4 && c1 !== c2 &&
-            c1 !== c3 && c1 !== c4 && c2 !== c3 && c2 !== c4 && c3 !== c4) {
-          const indMean = (ind[0][idx[0]] + ind[1][idx[1]] + ind[2][idx[2]]
-            + ind[3][idx[3]] + ind[4][idx[4]]) / 5;
-          let syn = permPairs;
-          for (let i = 0; i < 5; i++)
-            for (let j = i + 1; j < 5; j++)
-              syn += champPairAdjRaw(perm[i], cands[i][idx[i]], perm[j], cands[j][idx[j]]);
-          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
-          if (total > floor) {
-            const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
-            results.push({ assign, total, ind: indMean, syn });
-            if (results.length > keep * 4) {
-              results.sort((a, b) => b.total - a.total);
-              results.length = keep;
-              floor = results[keep - 1].total;
-            }
-          }
+      const maxSuffix = Array(6).fill(0), pairRemainder = Array(6).fill(0);
+      for (let d = 4; d >= 0; d--) {
+        maxSuffix[d] = maxSuffix[d + 1] + Math.max(...ind[d]);
+        for (let i = 0; i < d; i++) {
+          const pk = perm[i] < perm[d] ? perm[i] + "|" + perm[d] : perm[d] + "|" + perm[i];
+          pairRemainder[d] += pairBoostIdx[pk] || 0;
         }
-        let d = 4;
-        while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
-        if (d < 0) break;
+        pairRemainder[d] += pairRemainder[d + 1];
       }
+      const chosen = [], used = new Set();
+      function search(depth, indSum, champSyn) {
+        const upper = (indSum + maxSuffix[depth]) / 5 + permPairs + champSyn + pairRemainder[depth];
+        if (Math.max(0.05, Math.min(0.95, upper)) <= floor) return;
+        if (depth === 5) {
+          const indMean = indSum / 5, syn = permPairs + champSyn;
+          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
+          results.push({ assign: perm.map((rid,i) => ({player:rid,champ:chosen[i],role:ROLES[i]})), total, ind:indMean, syn });
+          if (results.length > keep * 4) {
+            results.sort((a,b) => b.total-a.total); results.length=keep; floor=results[keep-1].total;
+          }
+          return;
+        }
+        for (let ci=0; ci<cands[depth].length; ci++) {
+          const cid=cands[depth][ci]; if (used.has(cid)) continue;
+          let extra=0;
+          for(let i=0;i<depth;i++) extra+=champPairAdjRaw(perm[i],chosen[i],perm[depth],cid);
+          chosen.push(cid); used.add(cid);
+          search(depth+1,indSum+ind[depth][ci],champSyn+extra);
+          used.delete(cid); chosen.pop();
+        }
+      }
+      search(0,0,0);
     }
   }
   results.sort((a, b) => b.total - a.total);
@@ -1722,12 +1948,9 @@ function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
 // filters, same scoring model, every comparison flipped.
 
 // Anti-candidates: the lowest-scoring champs a player could take into a role.
-// The mastery/games ranges and draft availability still apply, and so does
-// roleViable — without it the "worst" comp is just five champs shoved into
-// lanes nobody plays them in (Miss Fortune jungle), which is trivially bad
-// and tells you nothing. Gated to real drafts, the nightmare is made of picks
-// that actually happen: champs the meta plays in that lane (or the player has
-// a genuine in-role sample on), chosen for the worst records this roster has.
+// Mastery/games ranges and draft availability remain hard filters. Prefer
+// role-viable picks; if none meet those filters, allow other eligible champs,
+// matching candidates(). An empty eligible pool always stays empty.
 // Shares candCache (distinct key prefix) so every existing cache clear works.
 function worstCandidates(riotId, role, n = 3) {
   const ck = "worst|" + riotId + "|" + role + "|" + n;
@@ -1738,22 +1961,17 @@ function worstCandidates(riotId, role, n = 3) {
   for (const m of p.mastery) if (!pool.has(m.championId)) pool.set(m.championId, null);
   const scored = [...pool.keys()].map(cid => ({
     cid,
-    s: slotScore(riotId, cid, role) + roleShare(pool.get(cid), role) * 0.02,
+    s: slotScore(riotId, cid, role),
+    roleShare: roleShare(pool.get(cid), role),
     viable: roleViable(pool.get(cid), cid, role),
     mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
-    inRange: inGamesRange((pool.get(cid) || {}).games || 0),
+    inRange: inGamesRange(roleGames(pool.get(cid), role)),
   })).filter(c => !draftUnavailable(c.cid) && !counterAvoid.has(c.cid)
     && !uniqueExclude.has(riotId + "|" + c.cid));
   const eligible = scored.filter(c => c.mastered && c.inRange);
-  // degrade like candidates() does — viability outranks the pref filters, so
-  // the list only ever leaves realistic drafts when the player has none
-  const tiers = [
-    eligible.filter(c => c.viable),
-    scored.filter(c => c.viable),
-    eligible,
-    scored,
-  ];
-  const list = (tiers.find(t => t.length) || []).sort((a, b) => a.s - b.s);
+  // Fall back within hard filters, matching candidates().
+  const tiers = [eligible.filter(c => c.viable), eligible];
+  const list = (tiers.find(t => t.length) || []).sort((a, b) => a.s - b.s || b.roleShare - a.roleShare || a.cid - b.cid);
   return candCache[ck] = list.slice(0, n).map(c => c.cid);
 }
 
@@ -1845,6 +2063,7 @@ const champIcon = id => {
   return c ? `https://ddragon.leagueoflegends.com/cdn/${D.ddragonVersion}/img/champion/${c.slug}.png` : "";
 };
 const pct = x => (x * 100).toFixed(1) + "%";
+const scoreText = x => (x * 100).toFixed(1) + "/100";
 
 // Real in-game profile icon when the dataset has one (needs a fetch_data.py
 // run that recorded profileIconId); otherwise no avatar at all.
@@ -1871,13 +2090,9 @@ const ROLE_ICON = {
 // whatever it sits in (the slot button, the rift pin badge).
 const LOCK_ICON = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a5 5 0 0 0-5 5v3H6.5A1.5 1.5 0 0 0 5 11.5v9A1.5 1.5 0 0 0 6.5 22h11a1.5 1.5 0 0 0 1.5-1.5v-9a1.5 1.5 0 0 0-1.5-1.5H17V7a5 5 0 0 0-5-5zm-3 5a3 3 0 1 1 6 0v3H9V7z"/></svg>`;
 
-// Verdict thresholds are pure presentation — the score itself is untouched.
-function verdict(total) {
-  if (total >= 0.66) return { label: "Lock it in", cls: "gold" };
-  if (total >= 0.58) return { label: "Favored", cls: "good" };
-  if (total >= 0.52) return { label: "Slight edge", cls: "good" };
-  if (total >= 0.45) return { label: "Coin flip", cls: "" };
-  return { label: "Uphill battle", cls: "bad" };
+function verdict(assign) {
+  const comparison = singleSwapComparison(assign);
+  return {...comparison,cls:comparison.status==="best_checked"?"good":""};
 }
 
 const gamesLabel = () =>
@@ -1903,13 +2118,13 @@ const masteryControl = sfx => `<div class="mfloor">
     </div>
   </div>`;
 
-// One games-played control, two thumbs (min + max) on a shared track.
+// One games-in-role control, two thumbs (min + max) on a shared track.
 const gamesControl = sfx => `<div class="mfloor">
-    <label for="mgSlider${sfx}">Games played <b data-grval>${gamesLabel()}</b></label>
-    <div class="dualrange" title="Champs outside this many total ranked games are filtered out of candidate lists (full width = off)">
+    <label for="mgSlider${sfx}">Games in role <b data-grval>${gamesLabel()}</b></label>
+    <div class="dualrange" title="Ranked games on this champion in the assigned role. Flex-only counts flex games only. Both limits apply; full width = off.">
       <span class="drtrack"></span><span class="drfill" data-grfill style="left:${minGames / MAX_GAMES_OFF * 100}%; width:${(Math.min(maxGames, MAX_GAMES_OFF) - minGames) / MAX_GAMES_OFF * 100}%"></span>
-      <input type="range" id="mgSlider${sfx}" aria-label="Games played minimum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${minGames}">
-      <input type="range" id="xgSlider${sfx}" aria-label="Games played maximum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${Math.min(maxGames, MAX_GAMES_OFF)}">
+      <input type="range" id="mgSlider${sfx}" aria-label="Games in role minimum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${minGames}">
+      <input type="range" id="xgSlider${sfx}" aria-label="Games in role maximum" min="0" max="${MAX_GAMES_OFF}" step="1" value="${Math.min(maxGames, MAX_GAMES_OFF)}">
     </div>
   </div>`;
 
@@ -1972,7 +2187,7 @@ function render() {
       <div>
         <div class="card" id="squadCard">
           <h2>Squad</h2>
-          <div class="hint" style="margin-bottom:10px">Optimizer picks the best 5 of those checked.</div>
+          <div class="hint" style="margin-bottom:10px">Searches the selected squad for strong five-player comps.</div>
           ${D.players.map(p => {
             const games = p.champions.reduce((a, c) => a + c.games, 0);
             const wins = p.champions.reduce((a, c) => a + c.wins, 0);
@@ -2005,7 +2220,8 @@ function render() {
           <button class="btn full" id="opt">Optimize comp</button>
         </div>
         <div class="card">
-          <h2>Estimated win rate</h2>
+          <h2>Composition score</h2>
+          <p class="dim" style="font-size:12px">A recommendation heuristic, not a calibrated chance of winning.</p>
           <div class="hero-row">
             <span class="hero-num" id="hero">–</span>
             <span class="hero-delta" id="heroDelta" hidden></span>
@@ -2013,7 +2229,11 @@ function render() {
           </div>
           <div class="meter"><span class="tick"></span><div class="fill" id="meter" style="width:0%"></div></div>
           <div class="wintrend" id="winTrend" hidden></div>
+          <p class="dim" id="gradeScope" style="font-size:12px" hidden></p>
+          <p class="dim" id="scoreEvidence" style="font-size:12px" hidden></p>
           <div class="breakdown" id="breakdown"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px"><label for="recordSide">Side</label><select id="recordSide" aria-label="Your side before the match"><option value="">Unknown</option><option value="100">Blue</option><option value="200">Red</option></select><button class="btn" id="recordComp">Record comp</button><button class="btn" id="exportPredictions">Export records</button></div>
+          <p class="dim" id="recordStatus" role="status" style="font-size:12px">Record before the match starts. Saved only in this browser.</p>
         </div>
         <div class="card" id="riftCard" hidden></div>
         ${PROFILES ? `<div class="card" id="profileCard">
@@ -2032,7 +2252,7 @@ function render() {
             ${RAW && RAW.players.players.some(p => p.champions.some(c => c.q)) ? "" : "hidden"}
             title="Score and display using flex-queue games only">Flex only</button>
           <button class="btn toggle ${strictRole ? "active" : ""}" id="roleToggle2"
-            title="Champion win rates count only games played in the assigned role">Role WR</button>
+            title="Emphasize games in the assigned role; off-role champion games still contribute at reduced weight">Role WR</button>
           ${masteryControl("2")}
           ${gamesControl("2")}
         </div>
@@ -2044,7 +2264,7 @@ function render() {
               title="Fearless session: a finished flex game from the past 6 hours whose five players and champs exactly match one of these top-10 comps (either list) locks those champions out of suggestions until the game ages out. No bridge needed.">Fearless</button>
             <span class="tabs h2tabs" id="rankedTabs">
               <button id="tabAssigned">Roles as set</button>
-              <button id="tabOverall">Best overall</button>
+              <button id="tabOverall">Best found</button>
               <button id="tabWorst" title="The inverse search: the worst realistic comp this roster could field — real picks for each lane, the worst records to pilot them">Nightmare blunt rotation</button>
             </span>
           </h2>
@@ -2055,6 +2275,8 @@ function render() {
     <datalist id="champdl">${Object.keys(CHAMP_BY_NAME).sort()
       .map(k => `<option value="${champName(CHAMP_BY_NAME[k])}">`).join("")}</datalist>`;
   wirePageNav();
+  $("#recordComp").addEventListener("click", recordCurrentComp);
+  $("#exportPredictions").addEventListener("click", exportPredictions);
   document.querySelectorAll("[data-player]").forEach(cb =>
     cb.addEventListener("change", e => {
       included[e.target.dataset.player] = e.target.checked;
@@ -2091,8 +2313,8 @@ function render() {
     el.addEventListener("input", e => setMasteryRange(Math.min(masteryMin, +e.target.value), +e.target.value)));
   const setGamesRange = (lo, hi) => {
     minGames = lo; maxGames = hi;
-    localStorage.setItem("minGames", minGames);
-    localStorage.setItem("maxGames", maxGames);
+    localStorage.setItem("minRoleGames", minGames);
+    localStorage.setItem("maxRoleGames", maxGames);
     document.querySelectorAll("[data-grval]").forEach(el => el.textContent = gamesLabel());
     document.querySelectorAll("[data-grfill]").forEach(el => {
       el.style.left = minGames / MAX_GAMES_OFF * 100 + "%";
@@ -2132,41 +2354,38 @@ function render() {
 // The draft tool IS the rift card: picks live on the map (enemy pins open a
 // lane/remove popover), bans sit in a compact strip below it, and the two
 // inputs stay for fast entry during a timed ban phase.
-// Best answers: for each enemy pick, the strongest meta counters among the
-// champs the lane's player could actually lock — their candidate list, so the
-// mastery/games filters, bans, taken champs, and fearless exclusions already
-// apply. Ranked by the lane matchup record alone (the candidates are all
-// picks the player is good on; this orders them by who they beat). Tapping a
-// chip locks it into the slot, exactly like picking it by hand.
+// Draft answers share the full composition objective used by the grade.
+// Raw matchup records are supporting evidence, not the ranking criterion.
 function answersBlock() {
   const rows = [];
+  const assign = slots.map((s,i)=>({...s,role:ROLES[i]}));
   for (const [ecid, a] of enemyLaneMap()) {
     ensureCounters(ecid, a.role);  // the assigned lane can be one laneDist never listed
     const i = ROLES.indexOf(a.role);
     const player = i >= 0 && slots[i].player;
     if (!player) continue;
-    const opts = [];
-    for (const cid of candidates(player, a.role, 15)) {
-      const rec = matchupRec(ecid, cid, a.role);
-      if (!rec || rec.play < 20) continue;
-      opts.push({ cid, wr: 1 - rec.win / rec.play, play: rec.play });
-    }
-    opts.sort((x, y) => y.wr - x.wr);
-    const top = opts.slice(0, 3);
+    const top = replacementRecommendations(assign,a.role).slice(0,3);
+    const keepCurrent = top.length && top[0].full && top[0].delta < .0005;
     rows.push(`<div class="answer-row">
       <span class="ans-vs"><img src="${champIcon(ecid)}" alt=""><span>vs <b>${champName(ecid)}</b>
         <span class="dim">${ROLE_LABEL[a.role].toLowerCase()}${a.locked ? "" : "?"}</span></span></span>
       ${top.length
-        ? top.map(t => `<button class="achip${slots[i].champ === t.cid ? " current" : ""}" data-answer="${i}:${t.cid}"
-            title="${champName(t.cid)}: ${pct(t.wr)} into ${champName(ecid)} over ${t.play.toLocaleString()} meta games — tap to lock it in for ${player.split("#")[0]}">
-            <img src="${champIcon(t.cid)}" alt="${champName(t.cid)}"><span class="${t.wr > 0.505 ? "pos" : t.wr < 0.495 ? "neg" : ""}">${pct(t.wr)}</span>
-          </button>`).join("")
-        : `<span class="dim" style="font-size:12px">no matchup data yet</span>`}
+        ? top.map(t => {
+          const rec=matchupRec(ecid,t.cid,a.role);
+          const matchup=rec?.play?`${pct(1-rec.win/rec.play)} observed matchup WR over ${rec.play.toLocaleString()} meta games`:"No observed matchup record";
+          const value=t.full?`${t.delta>=0?"+":""}${(t.delta*100).toFixed(1)} pts`:`slot ${scoreText(t.rankScore)}`;
+          const title=`${champName(t.cid)}: ${t.full?"change in full composition estimate before display limits":"individual slot estimate"}. ${matchup}. Tap to lock in for ${player.split("#")[0]}.`;
+          return `<button class="achip" data-answer="${i}:${t.cid}" title="${esc(title)}">
+            <img src="${champIcon(t.cid)}" alt="${champName(t.cid)}"><span class="${t.full&&t.delta>=.0005?"pos":t.full&&t.delta<=-.0005?"neg":""}">${value}</span>
+          </button>`;
+        }).join("")
+        : `<span class="dim" style="font-size:12px">${allyLocked(a.role,slots[i].champ)?"Pick locked; unlock to compare replacements":"No legal replacement in the checked pool"}</span>`}
+      ${keepCurrent ? `<span class="dim" style="font-size:12px">Keep ${esc(champName(slots[i].champ))}: no checked replacement improves the estimate.</span>` : ""}
     </div>`);
   }
   if (!rows.length) return "";
   return `<div class="answers">
-    <div class="hint" style="margin:8px 0 2px">Best answers — the lane player's strongest meta matchups into each enemy pick. Tap one to lock it in.</div>
+    <div class="hint" style="margin:8px 0 2px">Best answers — ranked by full composition estimate when all five picks are set, otherwise by slot score. Checks up to 15 candidates per unlocked slot. Hover for observed matchup WR and sample size; tap to lock a pick.</div>
     ${rows.join("")}</div>`;
 }
 
@@ -2709,7 +2928,7 @@ function draftChanged(rerenderCard = true) {
   const dead = slots.flatMap((s, i) => {
     if (!s.champ || allyLock.get(ROLES[i]) === s.champ) return [];
     if (draftUnavailable(s.champ)) return [champName(s.champ)];
-    if (counterAvoid.has(s.champ)) return [champName(s.champ) + " (hard-countered)"];
+    if (counterAvoid.has(s.champ)) return [champName(s.champ) + " (marked to avoid)"];
     return [];
   });
   const had = { assigned: !!rankedTabs.assigned, overall: !!rankedTabs.overall, worst: !!rankedTabs.worst };
@@ -2720,7 +2939,7 @@ function draftChanged(rerenderCard = true) {
     else had.overall = true;
   } else {
     const swaps = autoReplaceDead();
-    if (swaps) autoSwapNote = `auto-swapped ${swaps.join(", ")} — pick was banned, taken, or hard-countered`;
+    if (swaps) autoSwapNote = `auto-swapped ${swaps.join(", ")} — pick was banned, taken, or marked to avoid`;
   }
   if (rerenderCard) renderDraft();
   else refreshAnswers();
@@ -3007,9 +3226,9 @@ function playerNotes(p) {
     else if (m < 5) notes.push(`only ${m} champ${m > 1 ? "s" : ""} in mastery range`);
   }
   if (minGames || maxGames < MAX_GAMES_OFF) {
-    const n = p.champions.filter(c => inGamesRange(c.games)).length;
-    if (n === 0) notes.push(`no champs in games range`);
-    else if (n < 5) notes.push(`only ${n} champ${n > 1 ? "s" : ""} in games range`);
+    const n = p.champions.filter(c => ROLES.some(role => inGamesRange(roleGames(c, role)))).length;
+    if (n === 0) notes.push(`no champs in the role-games range in any role`);
+    else if (n < 5) notes.push(`only ${n} champ${n > 1 ? "s" : ""} in the role-games range in at least one role`);
   }
   // rendered inline on the tag line (fixed row height — see .lowdata note)
   return notes.length ? ` · <span class="lowdata" title="${notes.join("; ")}">${notes.join(" · ")}</span>` : "";
@@ -3043,7 +3262,7 @@ function renderSlots() {
       // must not leak the hand-picked champ into the cache
       const cands = [...candidates(s.player, role, 15)];
       if (!cands.length && !s.champ)
-        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery/games filters</div>`;
+        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery / games-in-role filters</div>`;
       if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
       const opt = cid => `<option value="${cid}" ${s.champ === cid ? "selected" : ""}>${champName(cid)}</option>`;
       const playedThere = cands.filter(cid => {
@@ -3066,7 +3285,7 @@ function renderSlots() {
         !shown.has(cid)
         && !draftUnavailable(cid)
         && inMasteryRange((masteryIdx[s.player] || {})[cid] || 0)
-        && inGamesRange((poolAll.get(cid) || {}).games || 0));
+        && inGamesRange(roleGames(poolAll.get(cid), role)));
       // champs cut from the candidate list by its display cap are still
       // meta-viable — group them honestly instead of calling them off-meta
       const cutViable = extras.filter(cid => roleViable(poolAll.get(cid), cid, role)).sort(byScore);
@@ -3078,19 +3297,19 @@ function renderSlots() {
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
         const e = p.champions.find(c => c.championId === s.champ);
-        // In Role WR mode the score only sees the in-role record, so that
-        // becomes the headline number and the all-roles record dims beneath
-        // it — otherwise a 52.8% Ekko card can hide the 33% jungle record
-        // the score actually used.
+        // Show the role sample used by the filter even when strict scoring is off.
+        // Off-role evidence still contributes at the scoring model's lower weight.
         const allRec = e ? `${e.wins}W ${e.games - e.wins}L (${pct(e.wins / e.games)})` : null;
         if (!e) stat = `<span class="dim">no ranked games</span>`;
-        else if (strictRole) {
+        else {
           const rr = e.roles[role] || { games: 0, wins: 0 };
           stat = (rr.games
             ? `${ROLE_LABEL[role].toLowerCase()} ${rr.wins}W ${rr.games - rr.wins}L (${pct(rr.wins / rr.games)})`
             : `<span class="dim">no ${ROLE_LABEL[role].toLowerCase()} games — scored from meta prior + off-role record</span>`)
             + `<br><span class="dim">all roles ${allRec}</span>`;
-        } else stat = allRec;
+        }
+        if (!inGamesRange(roleGames(e, role)))
+          stat += `<br><span class="banned-note">selected pick outside games-in-role range</span>`;
         if (META) stat += `<br><span class="dim">meta ${pct(metaWR(s.champ, role))}</span>`;
         const pts = (masteryIdx[s.player] || {})[s.champ];
         stat += `<br><span class="dim">mastery ${pts ? (pts >= 100000 ? (pts / 1000).toFixed(0) + "k" : pts.toLocaleString()) : "—"}</span>`;
@@ -3102,7 +3321,7 @@ function renderSlots() {
         else {
           const hc = hardCounters(s.champ, role);
           if (hc.length)
-            stat += `<br><span class="banned-note">hard-countered by ${hc.map(champName).join(", ")}!</span>`;
+            stat += `<br><span class="banned-note" title="Observed matchup Wilson upper bound is below its champion-strength baseline; baseline and selection uncertainty are not included.">Unfavorable matchup estimate vs ${hc.map(champName).join(", ")}</span>`;
         }
         // surface the matchups the score silently includes — the meta win rate
         // of this champ against each enemy pick that might lane here, with the
@@ -3129,7 +3348,8 @@ function renderSlots() {
             }
           }
         }
-        stat += `<br><span class="scorechip">score ${pct(slotScore(s.player, s.champ, role))}</span>`;
+        stat += `<br><span class="scorechip">score ${scoreText(slotScore(s.player, s.champ, role))}</span>`;
+        stat += evidenceHTML(pickEvidence(s.player,s.champ,role));
       }
     }
     // The lock control only exists while drafting — outside a draft nothing
@@ -3196,20 +3416,20 @@ function setHero(total) {
   heroShown = total;
   if (heroAnim) { cancelAnimationFrame(heroAnim); heroAnim = null; }
   el.classList.remove("up", "down");
-  if (prev == null || Math.abs(total - prev) < 0.0005) { el.textContent = pct(total); return; }
+  if (prev == null || Math.abs(total - prev) < 0.0005) { el.textContent = scoreText(total); return; }
   void el.offsetWidth;  // restart the flash even if the class was just removed
   el.classList.add(total > prev ? "up" : "down");
   const t0 = performance.now(), dur = 600;
   const step = now => {
     const k = Math.min(1, (now - t0) / dur);
     const e = 1 - Math.pow(1 - k, 3);
-    el.textContent = pct(prev + (total - prev) * e);
+    el.textContent = scoreText(prev + (total - prev) * e);
     heroAnim = k < 1 ? requestAnimationFrame(step) : null;
   };
   heroAnim = requestAnimationFrame(step);
 }
 
-// The draft's win probability over time — one point per score change, hover a
+// The draft's composition score over time — one point per score change, hover a
 // dot for the event that caused it. Pure presentation of numbers already shown.
 function trendSVG() {
   const W = 300, H = 32;
@@ -3225,9 +3445,9 @@ function trendSVG() {
   const dots = winLog.map((p, i) =>
     `<circle class="wt-dot${i === winLog.length - 1 ? " last" : ""}" cx="${x(i).toFixed(1)}"
        cy="${y(p.total).toFixed(1)}" r="${i === winLog.length - 1 ? 2.5 : 1.8}">
-       <title>${pct(p.total)}${p.label ? " — " + p.label : ""}</title></circle>`).join("");
+       <title>${scoreText(p.total)}${p.label ? " — " + p.label : ""}</title></circle>`).join("");
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
-      aria-label="win probability across this draft">
+      aria-label="composition score across this draft">
       ${guide}<polyline class="wt-line" points="${pts}" vector-effect="non-scaling-stroke"/>${dots}</svg>
     <div class="wt-cap">this draft · ${winLog.length} moves</div>`;
 }
@@ -3249,6 +3469,8 @@ function renderScore() {
     $("#hero").textContent = "–"; $("#meter").style.width = "0%";
     $("#heroDelta").hidden = true;
     verdictEl.hidden = true;
+    $("#gradeScope").hidden = true;
+    $("#scoreEvidence").hidden = true;
     $("#breakdown").textContent = "Fill all five slots (distinct players and champions).";
     return;
   }
@@ -3262,7 +3484,7 @@ function renderScore() {
     const d = sc.total - prevTotal;
     dEl.hidden = false;
     dEl.className = "hero-delta " + (d > 0 ? "pos" : "neg");
-    dEl.innerHTML = `${d > 0 ? "▲ +" : "▼ −"}${(Math.abs(d) * 100).toFixed(1)}pp`
+    dEl.innerHTML = `${d > 0 ? "▲ +" : "▼ −"}${(Math.abs(d) * 100).toFixed(1)} pts`
       + (cause ? ` <span class="cause">· ${cause}</span>` : "");
   } else if (prevTotal == null) dEl.hidden = true;
   if (draftMode && (!winLog.length
@@ -3280,10 +3502,18 @@ function renderScore() {
     ? { label: dead.map(a => champName(a.champ)).join(", ")
         + (effBans().has(dead[0].champ) ? " banned" : effEnemy().has(dead[0].champ)
           ? " taken" : " already played this session") + " — re-optimize", cls: "bad" }
-    : verdict(sc.total);
+    : verdict(assign);
   verdictEl.hidden = false;
   verdictEl.textContent = v.label;
   verdictEl.className = "verdict" + (v.cls ? " " + v.cls : "");
+  const gradeScope=$("#gradeScope"), scoreEvidence=$("#scoreEvidence");
+  gradeScope.hidden=!!dead.length;scoreEvidence.hidden=!!dead.length;
+  if(!dead.length) {
+    const bestSwap=v.status==="improvement"?v.alternatives[0]:null;
+    gradeScope.textContent=(bestSwap?`Best checked swap: ${champName(bestSwap.cid)} at ${ROLE_LABEL[bestSwap.role]}. `:"")
+      +`${v.checkedAlternatives} legal single swaps checked. ${v.scope}`;
+    scoreEvidence.textContent=`Evidence: ${v.evidence.label}. Sample size is separate from the comparison grade.`;
+  }
   const synCls = sc.syn >= 0 ? "pos" : "neg";
   // Hard-counter prompts: flag the matchup and let the player decide — never
   // swap their pick out from under them over a counter alone.
@@ -3296,28 +3526,28 @@ function renderScore() {
   });
   $("#breakdown").innerHTML =
     flagged.map(f => `<div class="counter-flag">
-      <span class="banned-note">${champName(f.cid)} is hard-countered by ${f.names}</span>
+      <span class="banned-note" title="20+ observed games, likely lane, and matchup Wilson upper bound below its baseline. Baseline and selection uncertainty are not included.">${champName(f.cid)}: unfavorable matchup estimate vs ${f.names}</span>
       <button class="btn toggle" data-cswap="${f.cid}">Swap it</button>
       <button class="btn toggle" data-ckeep="${f.key}">Keep</button>
     </div>`).join("") +
     (autoSwapNote
       ? `<b style="color:var(--warning)">${autoSwapNote}</b><br>`
       : "") +
-    `Individual baseline: <b>${pct(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
+    `Individual baseline: <b>${scoreText(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
     `Average of the five slot scores: each player's win rate on their champion in that role ` +
-    `(shrunk toward the champ's current-patch meta WR), plus mastery bonus and role comfort, ` +
+    `(shrunk toward the champ's current-patch meta WR), plus sample-shrunk role comfort, ` +
     `minus off-role penalties. "How good are these five picks in isolation?"</span></span><br>` +
-    `Synergy adjustment: <b class="${synCls}">${sc.syn >= 0 ? "▲ +" : "▼ "}${(sc.syn * 100).toFixed(1)}pp</b>` +
+    `Synergy adjustment: <b class="${synCls}">${sc.syn >= 0 ? "▲ +" : "▼ "}${(sc.syn * 100).toFixed(1)} pts</b>` +
     `<span class="info" tabindex="0">i<span class="tip">` +
     `Sum over every champ pair and player duo of how your actual shared-game record deviates ` +
     `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
     `are small. Duo records are role-weighted: games where the pair played these exact roles ` +
     `count fully, their games in other role combos count at ${OFF_ROLE_GAME_WEIGHT}x ` +
-    `(0 under "Role WRs only"). The duo sum is also scaled to ${PAIR_OVERLAP_DISCOUNT}x, because the ten ` +
+    `(0 with Role WR enabled). The duo sum is also scaled to ${PAIR_OVERLAP_DISCOUNT}x, because the ten ` +
     `pair records in a five-stack largely re-count the same games. ` +
     `Champ pairs are pilot-attributed: only games where these two players played ` +
-    `these two champions themselves count. Green: this group overperforms together. Red: you ` +
-    `win less together than your individual stats predict. Caveat: pair and individual records ` +
+    `these two champions themselves count. Green: positive shared-record adjustment. Red: negative shared-record adjustment. You ` +
+    `should not interpret these as measured causal chemistry. Caveat: pair and individual records ` +
     `come from the same games, so hot streaks inflate both.</span></span>`;
   document.querySelectorAll("[data-cswap]").forEach(b => b.addEventListener("click", () => {
     counterAvoid.add(+b.dataset.cswap);
@@ -3560,7 +3790,7 @@ function renderProfilePane() {
       return `<div class="pf-duo">${avatar(partner)}
         <span class="who"><b>${partner.split("#")[0]}</b><span>${s.games} games together${combo ? " · best as " + combo : ""}</span></span>
         <b>${pct(wr)}</b>
-        <span class="syn-chip ${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "▲ +" : "▼ "}${(d * 100).toFixed(1)}pp</span>
+        <span class="syn-chip ${d >= 0 ? "pos" : "neg"}">${d >= 0 ? "▲ +" : "▼ "}${(d * 100).toFixed(1)} pts</span>
       </div>`;
     }).join("") || `<div class="hint">no shared games recorded</div>`;
 
@@ -3975,12 +4205,11 @@ function renderTabs() {
     : activeTab === "worst"
       ? `<span class="ghost" aria-hidden="true">👻</span> Nightmare blunt rotation<span class="info" tabindex="0">i<span class="tip">
         The optimizer in reverse: the worst realistic comps this roster could field, judged by
-        the exact same model as the top comps (win rates shrunk toward the meta, mastery, role
-        comfort, synergy). Every pick is still a real draft — a champ the meta actually plays in
-        that lane, or one the player has a genuine in-role sample on — so this isn't "ADC in the
-        jungle", it's the champs and role swaps this group demonstrably loses with. Filters and
-        bans still apply. #1 is the single worst thing you could queue up as five. Please do not.</span></span>`
-      : "Top compositions";
+        the same heuristic as the top comps (shrunk records, role comfort and synergy).
+        Role-viable picks are preferred, with eligible off-meta fallbacks. Filters and
+        bans still apply. These are the lowest scores found in a limited candidate pool,
+        not proven losing compositions.</span></span>`
+      : "Best compositions found";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
   $("#tabOverall").classList.toggle("active", activeTab === "overall");
   $("#tabWorst").classList.toggle("active", activeTab === "worst");
@@ -3995,27 +4224,28 @@ function renderTabs() {
 }
 
 function renderRanked(results) {
+  if (!results.length) { $("#ranked").innerHTML = `<div class="empty">${emptyIcon()}<br>${emptyPoolMessage()}</div>`; return; }
   $("#ranked").innerHTML = `<table>
     <tr><th></th>
-    <th>Win rate<span class="info" tabindex="0">i<span class="tip">
-      Estimated win rate for the whole comp: the individual baseline (average of the five slot
-      scores — win rate on champ-in-role shrunk toward the current-patch meta, plus mastery and
-      role comfort) plus the synergy adjustment.</span></span></th>
+    <th>Score<span class="info" tabindex="0">i<span class="tip">
+      Uncalibrated recommendation score, out of 100: average slot evidence plus the
+      shared-record adjustment. This is not a probability of winning. Search considers
+      up to eight candidates per player and role; results are the best found in that pool.</span></span></th>
     <th>Comp</th>
     <th>Synergy<span class="info" tabindex="0">i<span class="tip">
       How much this group's actual shared-game record shifts the estimate: champ pairs (only
       games these two players piloted these two champs themselves) measured against their
       average meta WR, player duos against 50%, shrunk when samples are small. Duo games in
       the assigned role combo count fully; the duo's other games are discounted.
-      Green = you overperform together; red = you win less together than your individual stats
-      predict.</span></span></th></tr>
+      Green and red indicate positive and negative shared-record adjustments; these
+      are not measured causal effects or calibrated probabilities.</span></span></th></tr>
     ${results.map((r, i) => `
       <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
         <td><span class="rank ${i === 0 && activeTab === "worst" ? "rneg" : i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
-        <td><div class="wr-cell"><b>${pct(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
+        <td><div class="wr-cell"><b>${scoreText(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
         <td class="champ-icons">${r.assign.map(a =>
           `<span class="ci" data-tip="${a.player.split("#")[0]} · ${ROLE_LABEL[a.role]}"><img src="${champIcon(a.champ)}" alt="${champName(a.champ)}"></span>`).join("")}</td>
-        <td><span class="syn-chip ${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "▲ +" : "▼ "}${(r.syn * 100).toFixed(1)}pp</span></td>
+        <td><span class="syn-chip ${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "▲ +" : "▼ "}${(r.syn * 100).toFixed(1)} pts</span></td>
       </tr>`).join("")}
   </table>`;
   document.querySelectorAll(".comp-row").forEach(tr =>
@@ -4039,8 +4269,7 @@ function runOptimize() {
   releaseDeadLocks();
   const { fixed, pinPlayer } = lockPins();
   rankedTabs.overall = optimize(10, fixed, pinPlayer);
-  if (!rankedTabs.overall.length) rankedTabs.overall = null;
-  else applyComp(rankedTabs.overall[0]);
+  if (rankedTabs.overall.length) applyComp(rankedTabs.overall[0]);
   activeTab = "overall";
   renderTabs();
 }
@@ -4049,7 +4278,7 @@ function runOptimizeChamps() {
   noteEvent("optimized champs");
   releaseDeadLocks();
   rankedTabs.assigned = optimizeChamps(10, lockPins().fixed);
-  if (rankedTabs.assigned) applyComp(rankedTabs.assigned[0]);
+  if (rankedTabs.assigned?.length) applyComp(rankedTabs.assigned[0]);
   activeTab = "assigned";
   renderTabs();
 }
@@ -4235,6 +4464,8 @@ const refreshedAt = iso => {
 
 // (Re)build every index and re-render — used at boot and after each refresh.
 function applyData(players, meta, profiles) {
+  if (META?.patch !== meta?.patch || META?.tier !== meta?.tier || META?.region !== meta?.region) counterIdx = {};
+  dAdjCache = {};
   D = players; META = meta; PROFILES = profiles;
   masteryIdx = {}; champPairIdx = {}; playerPairIdx = {};
   indCache = {}; candCache = {}; pairBoostIdx = null; pairDragIdx = null;
@@ -4273,13 +4504,15 @@ function applyData(players, meta, profiles) {
 
 function renderChips() {
   const chips = [
-    `patch <b>${D.ddragonVersion}</b>`,
-    META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} games`
-         + (META.tier && META.tier !== "all" ? ` · <b>${META.tier}</b>` : "") : `no meta data`,
+    `meta patch <b>${META?.patch || "unknown"}</b>`,
+    META ? `meta <b>${(META.matchCount / 1e6).toFixed(1)}M</b> ${META.region.toUpperCase()} solo/duo games`
+         + ` · <b>${META.tier === "emerald_plus" ? "Emerald+" : META.tier || "rank unspecified"}</b>` : `no meta data`,
     liveMode ? `refreshed <b>${refreshedAt(D.generatedAt)}</b>` : `fetched ${D.generatedAt.slice(0, 10)}`,
   ];
-  if (flexOnly) chips.push(`<b>flex games only</b>`);
-  if (strictRole) chips.push(`<b>role WRs only</b>`);
+  if (META?.analyzedAt) chips.push(`meta analyzed <b>${refreshedAt(META.analyzedAt)}</b>`);
+  if (flexOnly) chips.push(`<b>personal: flex only</b>`);
+  if (strictRole) chips.push(`<b>role-weighted WRs</b>`);
+  chips.push(D.history ? (D.history.complete ? `history current · ${D.history.windowDays || "all"} days` : `history incomplete · ${D.history.status || "catching up"}`) : "history coverage unknown");
   $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
 }
 
@@ -4311,23 +4544,25 @@ async function doRefresh(silent = false) {
   const restore = () => { btn.innerHTML = REFRESH_LABEL; btn.disabled = false; };
   const flash = msg => { btn.innerHTML = msg; setTimeout(restore, 2500); };
   try {
-    // keep pulling until the worker has caught up (it merges in small batches)
-    let added = 0, res;
+    // A bounded chunk prevents a large migration or retrying failure from
+    // trapping the UI. The worker persists pending work for the next click.
+    let added = 0, res = {}, calls = 0;
     do {
-      res = await fetch(WORKER_URL + "/refresh", { method: "POST" }).then(r => r.json());
+      const response = await fetch(WORKER_URL + "/refresh", { method: "POST" });
+      res = await response.json(); calls++;
       added += res.added || 0;
-    } while (res.remaining > 0);
-    if (added) {
-      const fresh = await loadLive();
-      if (fresh) { RAW = fresh; applyCurrent(); }
-    } else if (res.lastRefresh) {
-      // nothing new, but the server did just check — reflect that
-      D.generatedAt = res.lastRefresh;
-      renderChips();
-    }
+      if (!response.ok || res.error || res.retryAfterMs || res.retryAfter) break;
+    } while (res.remaining > 0 && calls < 8);
+    // Rehydration/expiry changes evidence even when no new game was added.
+    const fresh = await loadLive();
+    if (fresh) { RAW = fresh; applyCurrent(); }
+    btn.title = res.remaining > 0
+      ? `${res.remaining}+ work items queued; click Refresh to continue${res.retryAfterMs ? " after the retry delay" : ""}.`
+      : res.history?.complete === false ? "History remains incomplete; unavailable games or reconstruction may require another refresh."
+      : "Pull the group's newest games";
     btn.classList.remove("busy");
-    if (silent && !added) return restore();
-    flash(res.error ? "Refresh failed" : added ? `+${added} game${added > 1 ? "s" : ""}` : "Up to date");
+    if (silent && !added && !res.remaining && !res.error && !res.warning && res.history?.complete !== false) return restore();
+    flash(res.error ? "Refresh paused — retry" : res.remaining > 0 ? `${res.remaining}+ queued · refresh again` : res.warning || res.history?.complete === false ? "History incomplete" : added ? `+${added} game${added > 1 ? "s" : ""}` : "Up to date");
   } catch {
     btn.classList.remove("busy");
     if (silent) return restore();
