@@ -1135,26 +1135,16 @@ const ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"];
 const ROLE_LABEL = { TOP: "Top", JUNGLE: "Jungle", MIDDLE: "Mid", BOTTOM: "Bot", UTILITY: "Support" };
 
 // --- scoring model -------------------------------------------------------
-// Individual: champion win rate (in-role games full weight, other-role games
-// discounted) shrunk toward the champion's CURRENT-PATCH meta win rate for
-// that role (falls back to 50% if meta.json is absent),
-// + mastery familiarity bonus, − off-role penalty.
-// Synergy: pilot-attributed champ-pair WR deviation vs the pair's expected
-// meta WR (only games where these two PLAYERS piloted these two champs on the
-// same team), plus player-pair (duo) WR deviation vs 50%.
+// Production: average role-weighted personal records shrunk toward role meta,
+// with role comfort, off-role penalties and draft matchup residuals.
+// Shared match wins already enter personal records; no extra pair bonus is added.
 const K_IND = 10;        // shrinkage prior weight for individual champ WR
-const K_PAIR = 20;      // shrinkage for duo (player-pair) stats — real samples, median ~40 games
-// Pilot-attributed champ pairs are all tiny samples (5-8 games at best), and a
-// 5-stack's ten pair rows re-count the SAME few games — one win streak on one
-// comp showed up as +12pp of "synergy". ~100 shared games for half weight
-// keeps the term honest: it stays near-silent until a pairing has real evidence.
-const K_CHAMP_PAIR = 100;
 const MASTERY_MAX_BONUS = 0; // familiarity gates picks; no unvalidated score bonus
-const SYNERGY_WEIGHT = 0.4;      // how much a pair's WR deviation counts
-// The ten duo records in a 5-stack largely re-count the SAME games, so summing
-// them multiplies one shared win streak ~10x. This scales the sum back so ten
-// fully-overlapping pairs count the group's record roughly once.
-const PAIR_OVERLAP_DISCOUNT = 0.25;
+// Legacy pair model: frozen for offline comparisons only, never production search.
+const K_PAIR = 20;
+const K_CHAMP_PAIR = 100;
+const SYNERGY_WEIGHT = 0.4;
+const PAIR_OVERLAP_DISCOUNT = 0.25; // historical discount did not remove overlap
 const OFF_ROLE_PENALTY = 0.04;       // player rarely plays this champ in this role
 const OFF_META_PRIOR_PENALTY = 0; // champ has no meta presence in this role (e.g. Annie bot)
 const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a role's record
@@ -1165,9 +1155,9 @@ const OFF_ROLE_GAME_WEIGHT = 0.3;    // off-role games count this much toward a 
 const OFF_ROLE_GAME_WEIGHT_STRICT = 0.15;
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const ROLE_COMFORT_PRIOR = 20;     // shrink role share for small histories
-const SEARCH_CANDIDATES = 8;       // shared bounded pool for full/fixed-role search
-const MODEL_VERSION = "2026-11-24.3";
-const MIN_CHAMP_GAMES = 5;           // preferred: champs the player has actually logged games on
+const SEARCH_CANDIDATES = Infinity; // all eligible manual picks; no search cutoff
+const MODEL_VERSION = "2026-11-24.4";
+const MIN_CHAMP_GAMES = 5;           // profile evidence label only; never a search filter
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
 let D = null;           // loaded dataset
@@ -1184,14 +1174,14 @@ let indCache = {};      // memoized indScore — larger rosters make the search 
 let candCache = {};     // memoized candidates
 const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot cards
 // Mastery range: champs outside [masteryMin, masteryMax] mastery points are
-// filtered from a player's candidate list (with the usual graceful fallback).
+// filtered from a player's candidate list without fallback exceptions.
 // Default 30k minimum; a max slider at MASTERY_OFF means no upper cap.
 const MASTERY_OFF = 200000;
 let masteryMin = +(localStorage.getItem("masteryFloor") ?? 30000);
 let masteryMax = +(localStorage.getItem("masteryMax") ?? MASTERY_OFF);
 const inMasteryRange = pts => pts >= masteryMin && (masteryMax >= MASTERY_OFF || pts <= masteryMax);
 // Games-in-role range: count only this champion in the assigned role, in
-// the selected queue view. Neither strict scoring nor fallback tiers can
+// the selected queue view. Neither strict scoring nor search can
 // relax this filter. New storage keys avoid reinterpreting total-game limits.
 // A max slider at MAX_GAMES_OFF means no upper cap.
 const MAX_GAMES_OFF = 31;  // slider runs 0–30; the top notch means no ceiling
@@ -1199,10 +1189,8 @@ let minGames = Math.min(+(localStorage.getItem("minRoleGames") ?? 0), MAX_GAMES_
 let maxGames = +(localStorage.getItem("maxRoleGames") ?? MAX_GAMES_OFF);
 const roleGames = (entry, role) => entry?.roles?.[role]?.games || 0;
 const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
-// Strict role WRs: the in-role record dominates a champion's score and the
-// candidate "played" tier counts only in-role games; off-role games still
-// contribute at OFF_ROLE_GAME_WEIGHT_STRICT so champ-skill evidence is never
-// discarded outright.
+// Strict role WRs emphasize in-role evidence; off-role games still contribute
+// at OFF_ROLE_GAME_WEIGHT_STRICT. Eligibility is unchanged.
 let strictRole = localStorage.getItem("strictRole") === "1";
 
 // --- draft mode ------------------------------------------------------------
@@ -1555,20 +1543,6 @@ function champPairAdjRaw(pa, ca, pb, cb) {
 }
 const champPairAdj = (A, B) => champPairAdjRaw(A.player, A.champ, B.player, B.champ);
 
-// Best positive champ-pair adjustment per player pair — an upper bound used
-// to prune whole role-permutations in optimize() before scoring 3^5 combos.
-let pairBoostIdx = null;
-function buildPairBoost() {
-  pairBoostIdx = {};
-  for (const key in champPairIdx) {
-    const [x, y] = key.split(":");
-    const [pa, ca] = x.split("|"), [pb, cb] = y.split("|");
-    const adj = champPairAdjRaw(pa, +ca, pb, +cb);
-    const pk = pa < pb ? pa + "|" + pb : pb + "|" + pa;
-    if (adj > (pairBoostIdx[pk] || 0)) pairBoostIdx[pk] = adj;
-  }
-}
-
 // Duo record, role-weighted: shared games where the duo played the roles
 // they're assigned here count fully; games in other role combos are
 // discounted like indScore's off-role games (chemistry partly transfers,
@@ -1587,23 +1561,24 @@ function playerPairAdj(a, ra, b, rb) {
   return (shrunk(w, g, K_PAIR) - 0.5) * SYNERGY_WEIGHT * PAIR_OVERLAP_DISCOUNT * (g / (g + 10));
 }
 
-// Full comp score: mean individual + all pairwise synergy adjustments.
-function compScore(assign) {  // assign: [{player, champ, role}]
-  let ind = 0, champSyn = 0, playerSyn = 0;
-  for (const a of assign) ind += slotScore(a.player, a.champ, a.role);
-  ind /= assign.length;
-  for (let i = 0; i < assign.length; i++)
-    for (let j = i + 1; j < assign.length; j++) {
-      champSyn += champPairAdj(assign[i], assign[j]);
-      playerSyn += playerPairAdj(assign[i].player, assign[i].role, assign[j].player, assign[j].role);
-    }
-  const syn = champSyn + playerSyn, rawTotal = ind + syn;
-  return { total: Math.max(0.05, Math.min(0.95, rawTotal)), rawTotal, ind, syn, champSyn, playerSyn };
+// Production score does not add shared wins again as pairwise bonuses.
+// The old pair sums survive only as prospective comparison-model evidence.
+function legacyPairAdjustments(assign) {
+  let champion=0,player=0;
+  for(let i=0;i<assign.length;i++)for(let j=i+1;j<assign.length;j++) {
+    champion+=champPairAdj(assign[i],assign[j]);
+    player+=playerPairAdj(assign[i].player,assign[i].role,assign[j].player,assign[j].role);
+  }
+  return {champion,player,total:champion+player};
+}
+function compScore(assign) {
+  const ind=assign.reduce((sum,a)=>sum+slotScore(a.player,a.champ,a.role),0)/assign.length;
+  const syn = 0, rawTotal = ind + syn;
+  return {total:Math.max(.05,Math.min(.95,rawTotal)),rawTotal,ind,syn,champSyn:0,playerSyn:0};
 }
 
-// A champion is pickable for (player, role) only if the current meta plays it
-// there, or the player has a REAL personal sample there (a handful of off-meta
-// experiments — e.g. 9 games of Ezreal jungle — doesn't make it a draft pick).
+// Label established role picks separately in the picker. This does not filter
+// eligibility: off-meta choices remain available to the same optimizer.
 function roleViable(champEntry, champId, role) {
   if (champEntry && (champEntry.roles[role] || { games: 0 }).games >= OWN_ROLE_VIABLE_GAMES) return true;
   const m = META && META.champions[champId];
@@ -1613,42 +1588,22 @@ function roleViable(champEntry, champId, role) {
   return !!(pos && pos.games >= 100 && pos.roleRate >= 0.10);
 }
 
-// Top champion candidates for a player in a role.
+// One eligible pool for the manual picker, recommendations and every search.
+// Role viability and sample size are labels, never hidden exclusion tiers.
 function candidates(riotId, role, n = SEARCH_CANDIDATES) {
-  const ck = riotId + "|" + role + "|" + n;
-  if (ck in candCache) return candCache[ck];
-  const p = D.players.find(p => p.riotId === riotId);
-  const pool = new Map();
-  for (const c of p.champions) pool.set(c.championId, c);
-  for (const m of p.mastery.slice(0, 12)) if (!pool.has(m.championId)) pool.set(m.championId, null);
-  const scored = [...pool.keys()].map(cid => ({
-    cid,
-    s: slotScore(riotId, cid, role),
-    roleShare: roleShare(pool.get(cid), role),
-    viable: roleViable(pool.get(cid), cid, role),
-    mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
-    inRange: inGamesRange(roleGames(pool.get(cid), role)),
-    avail: !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid, role)
-      && !uniqueExclude.has(riotId + "|" + cid),
-    // in strict Role WR mode "played" means played IN THIS ROLE — a champ
-    // with a real sample elsewhere but none here drops out of the top tier
-    played: (strictRole
-      ? (((pool.get(cid) || {}).roles || {})[role] || { games: 0 }).games
-      : (pool.get(cid) || {}).games || 0) >= MIN_CHAMP_GAMES,
-  }));
-  // The mastery floor, games range, and draft availability (including champs
-  // the player agreed to draft around after a hard-counter flag) are hard
-  // filters — outside them a champ is simply not a pick for this player.
-  // Within them, prefer role-viable champs with a real game sample, degrading
-  // so the list stays useful.
-  const eligible = scored.filter(c => c.mastered && c.inRange && c.avail);
-  const tiers = [
-    eligible.filter(c => c.viable && c.played),
-    eligible.filter(c => c.viable),
-    eligible,
-  ];
-  const list = (tiers.find(t => t.length) || []).sort((a, b) => b.s - a.s || b.roleShare - a.roleShare || a.cid - b.cid);
-  return candCache[ck] = list.slice(0, n).map(c => c.cid);
+  const ck=riotId+'|'+role+'|'+n;
+  if(ck in candCache)return candCache[ck];
+  const p=D.players.find(p=>p.riotId===riotId);
+  if(!p)return [];
+  const pool=new Map(p.champions.map(c=>[c.championId,c]));
+  for(const m of p.mastery)if(!pool.has(m.championId))pool.set(m.championId,null);
+  const eligible=[...pool].filter(([cid,entry])=>
+    inMasteryRange(masteryIdx[riotId]?.[cid]||0) && inGamesRange(roleGames(entry,role)) &&
+    !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid,role) &&
+    !uniqueExclude.has(riotId+'|'+cid));
+  eligible.sort(([a,ea],[b,eb])=>slotScore(riotId,b,role)-slotScore(riotId,a,role)
+    ||roleShare(eb,role)-roleShare(ea,role)||a-b);
+  return candCache[ck]=eligible.slice(0,n).map(([cid])=>cid);
 }
 
 const completeComposition = assign => assign.length === 5
@@ -1661,13 +1616,13 @@ const replacementOrder = (a,b) => b.rankScore-a.rankScore
   || ROLES.indexOf(a.role)-ROLES.indexOf(b.role) || a.cid-b.cid;
 
 // One consistent recommendation objective for draft answers and local grades.
-// The candidate pool is bounded; this is not a global composition search.
+// Every eligible replacement is checked; this is a single-swap comparison.
 function replacementRecommendations(assign, role) {
   const i = assign.findIndex(a=>a.role===role), current = assign[i];
   if (!current?.player || allyLocked(role,current.champ)) return [];
   const full = completeComposition(assign), baseline = full ? compScore(assign) : null;
   const used = new Set(assign.filter((_,j)=>j!==i).map(a=>a.champ).filter(Boolean));
-  return candidates(current.player,role,15)
+  return candidates(current.player,role)
     .filter(cid=>cid!==current.champ && !used.has(cid) && !draftUnavailable(cid))
     .map(cid=>{
       const comp = assign.map((a,j)=>({...a,champ:j===i?cid:a.champ}));
@@ -1678,7 +1633,7 @@ function replacementRecommendations(assign, role) {
 }
 
 function singleSwapComparison(assign) {
-  const scope = "Same players and roles; up to 15 filtered candidates per unlocked slot. Comparison uses model points before display limits.";
+  const scope = "Same players and roles; all eligible picks in every unlocked slot. Comparison uses model points before display limits.";
   if (!completeComposition(assign)) return {status:"incomplete",label:"Complete the composition",scope,alternatives:[]};
   const current = compScore(assign);
   const lockedSlots = assign.filter(a=>allyLocked(a.role,a.champ)).length;
@@ -1765,6 +1720,7 @@ function predictionRecord(assign, capturedAt = new Date().toISOString(), side = 
     throw new Error("Choose five distinct players and available champions before recording.");
   if(side!==null && side!==100 && side!==200) throw new Error("Choose unknown, blue or red side.");
   const evidence=assign.map(a=>pickEvidence(a.player,a.champ,a.role));
+  const legacy=legacyPairAdjustments(assign);
   const score=compScore(assign), mean=arr=>arr.reduce((a,b)=>a+b,0)/arr.length;
   const clip=n=>Math.max(.05,Math.min(.95,n));
   const components={personal:mean(evidence.map(e=>e.shrunkPersonal)),meta:mean(evidence.map(e=>e.prior)),
@@ -1778,23 +1734,25 @@ function predictionRecord(assign, capturedAt = new Date().toISOString(), side = 
   return {schemaVersion:1,id:`${capturedAt}:${assign.map(a=>a.player+":"+a.champ).join("|")}`,
     modelVersion:MODEL_VERSION,capturedAt,captureStage:"pregame",side,queue:flexOnly?440:"ranked",
     comp:assign.map(identity),
-    scores:{current:score.total,previous:clip(mean(assign.map(a=>previousSlotScore(a.player,a.champ,a.role)))+score.syn*.5/SYNERGY_WEIGHT),
+    scores:{current:score.total,previous:clip(mean(assign.map(a=>previousSlotScore(a.player,a.champ,a.role)))+legacy.total*.5/SYNERGY_WEIGHT),
       metaOnly:clip(components.meta),shrunkPersonal:clip(components.personal),playerOnly:clip(components.player),
       noSynergy:clip(score.ind),noMastery:score.total,noComfort:clip(score.rawTotal-components.comfort),
       noMatchup:clip(score.rawTotal-components.matchup),noRolePenalty:clip(score.rawTotal+components.rolePenalty),
       noChampionSynergy:clip(score.rawTotal-score.champSyn),noPlayerSynergy:clip(score.rawTotal-score.playerSyn),
-      priorK20:withPrior(20),priorK40:withPrior(40),synergyHalf:clip(score.ind+score.syn*.5)},
-    components,gradeComparison,
+      priorK20:withPrior(20),priorK40:withPrior(40),synergyHalf:clip(score.ind+score.syn*.5),
+      legacyPairSynergy:clip(score.rawTotal+legacy.total),halfLegacyPairSynergy:clip(score.rawTotal+legacy.total*.5),
+      legacyChampionOnly:clip(score.rawTotal+legacy.champion),legacyPlayerOnly:clip(score.rawTotal+legacy.player)},
+    components,gradeComparison,legacyPairAdjustments:legacy,
     alternatives:alternatives.slice(0,3).map(a=>({comp:a.comp.map(identity),scores:{current:a.score.total},rawTotal:a.score.rawTotal})),
     alternativesNotice:"Unplayed one-swap alternatives have no observed outcome.",
     evaluationCohort:{historyComplete:historyCompleteness(),historyStatus:D.history?.status||null},
-    settings:{strictRole,minRoleGames:minGames,maxRoleGames:maxGames,masteryMin,masteryMax,draftMode,searchCandidates:SEARCH_CANDIDATES},
+    settings:{strictRole,minRoleGames:minGames,maxRoleGames:maxGames,masteryMin,masteryMax,draftMode,searchCandidates:"all-eligible"},
     meta:META?{patch:META.patch,tier:META.tier||null,region:META.region,analyzedAt:META.analyzedAt,fetchedAt:META.fetchedAt}:null,
     dataGeneratedAt:/[zZ]|[+-]\d{2}:?\d{2}$/.test(D.generatedAt||"") ? D.generatedAt : null,
     dataGeneratedAtRaw:D.generatedAt,history:D.history||null,evidence,
-    candidates:assign.map(a=>({riotId:a.player,role:a.role,championIds:candidates(a.player,a.role,SEARCH_CANDIDATES)})),
+    candidates:assign.map(a=>({riotId:a.player,role:a.role,championIds:candidates(a.player,a.role)})),
     opponents:[...effEnemy()].map(championId=>({championId,role:enemyRole.get(championId)||null})),
-    comparisonModels:{previous:"original K=8, synergy=.5, mastery+.03, unshrunk comfort; pre-review fallbacks",current:MODEL_VERSION}};
+    comparisonModels:{previous:"original K=8, synergy=.5, mastery+.03, unshrunk comfort; pre-review fallbacks",current:MODEL_VERSION,legacyPairSynergy:"2026-11-24.3 additive champion and player pairs"}};
 }
 
 // --- collection status ----------------------------------------------------
@@ -1821,221 +1779,78 @@ function* permutations(arr) {
       yield [arr[i], ...rest];
 }
 
-// Champion-only optimization: keep the player→role assignment currently in
-// the slots (e.g. what you got from fill) and search champions only.
-// fixed: {ROLE: championId} — champs already locked in the client stay put.
-function optimizeChamps(topN = 10, fixed = {}) {
-  const players = slots.map(s => s.player);
-  if (players.some(p => !p) || new Set(players).size !== 5) return null;
-  const cands = players.map((rid, i) =>
-    fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i], SEARCH_CANDIDATES));
-  const results = [];
-  const idx = [0, 0, 0, 0, 0];
-  while (true) {
-    const champs = idx.map((ci, i) => cands[i][ci]).filter(c => c !== undefined);
-    if (champs.length === 5 && new Set(champs).size === 5) {
-      const assign = players.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
-      results.push({ assign, ...compScore(assign) });
-    }
-    let d = 4;
-    while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
-    if (d < 0) break;
-  }
-  results.sort((a, b) => b.total - a.total);
-  return results.slice(0, topN);
-}
-
-// Full search over every 5-player subset × role permutation × candidate
-// champions. With 9+ players this is millions of combinations, so the inner
-// loop is allocation-free: scores are computed from cached numbers and a comp
-// object is only built when it beats the current top-N floor.
-// fixed: {ROLE: championId} — champs our team already locked; the role is
-// pinned to that champ while players and other roles stay fluid.
-// pinPlayer: {ROLE: riotId} — a hand-entered lock is a player+champ pairing
-// ("Bob locks Ahri mid"), so it must not become "someone else plays Ahri
-// mid". The live feed only reports a lane, so it pins the champ alone.
-function optimize(topN = 10, fixed = {}, pinPlayer = {}) {
-  const pool = D.players.map(p => p.riotId).filter(r => included[r]);
-  if (pool.length < 5) return [];
-  const pins = Object.entries(pinPlayer).map(([r, rid]) => [ROLES.indexOf(r), rid]);
-  const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
-  const keep = topN * 6;  // headroom for the dedup pass below
-  let results = [], floor = -Infinity;
-  if (!pairBoostIdx) buildPairBoost();
-  for (const five of playerSets) {
-    if (pins.some(([, rid]) => !five.includes(rid))) continue;
-    for (const perm of permutations(five)) {
-      if (pins.some(([i, rid]) => perm[i] !== rid)) continue;
-      const cands = perm.map((rid, i) =>
-        fixed[ROLES[i]] != null ? [fixed[ROLES[i]]] : candidates(rid, ROLES[i]));
-      if (cands.some(c => !c.length)) continue;
-      // player-pair synergy is constant for this role assignment
-      let permPairs = 0, champSynBound = 0;
-      for (let i = 0; i < 5; i++)
-        for (let j = i + 1; j < 5; j++) {
-          permPairs += playerPairAdj(perm[i], ROLES[i], perm[j], ROLES[j]);
-          const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
-          champSynBound += pairBoostIdx[pk] || 0;
-        }
-      const ind = cands.map((cs, i) => cs.map(cid => slotScore(perm[i], cid, ROLES[i])));
-      // upper bound for this whole role assignment — skip it if it can't place
-      let maxIndSum = 0;
-      for (const arr of ind) maxIndSum += Math.max(...arr);
-      if (maxIndSum / 5 + permPairs + champSynBound <= floor) continue;
-      const maxSuffix = Array(6).fill(0), pairRemainder = Array(6).fill(0);
-      for (let d = 4; d >= 0; d--) {
-        maxSuffix[d] = maxSuffix[d + 1] + Math.max(...ind[d]);
-        for (let i = 0; i < d; i++) {
-          const pk = perm[i] < perm[d] ? perm[i] + "|" + perm[d] : perm[d] + "|" + perm[i];
-          pairRemainder[d] += pairBoostIdx[pk] || 0;
-        }
-        pairRemainder[d] += pairRemainder[d + 1];
+// Exact top-N search over the complete eligible pool. Slot scores are additive,
+// so sorted optimistic bounds prune combinations without dropping any candidates.
+// One champion may appear only once. Results rank by unclipped model points.
+function compositionSearch(topN, direction=1) {
+  const results=[],poolCache=new Map();
+  const floor=()=>results.length<topN?-Infinity:direction*results[results.length-1].rawTotal;
+  function visit(players, fixed={}) {
+    if(topN<1)return;
+    const pools=players.map((rid,i)=>{
+      const role=ROLES[i],cid=fixed[role],key=rid+'|'+role+'|'+(cid??'');
+      if(poolCache.has(key))return poolCache.get(key);
+      const ids=cid!=null ? (!draftUnavailable(cid)&&!counterAvoid.has(cid)?[cid]:[]) : candidates(rid,role);
+      const picks=ids.map(champ=>({champ,value:direction*slotScore(rid,champ,role)/5}))
+        .sort((a,b)=>b.value-a.value||a.champ-b.champ);
+      poolCache.set(key,picks);return picks;
+    });
+    if(pools.some(p=>!p.length))return;
+    const suffix=Array(6).fill(0);
+    for(let i=4;i>=0;i--)suffix[i]=suffix[i+1]+pools[i][0].value;
+    const chosen=[],used=new Set();
+    function search(depth,value) {
+      if(value+suffix[depth]<=floor()+1e-12)return;
+      if(depth===5) {
+        const assign=players.map((player,i)=>({player,champ:chosen[i],role:ROLES[i]}));
+        results.push({assign,...compScore(assign)});
+        results.sort((a,b)=>direction*(b.rawTotal-a.rawTotal));
+        if(results.length>topN)results.length=topN;
+        return;
       }
-      const chosen = [], used = new Set();
-      function search(depth, indSum, champSyn) {
-        const upper = (indSum + maxSuffix[depth]) / 5 + permPairs + champSyn + pairRemainder[depth];
-        if (Math.max(0.05, Math.min(0.95, upper)) <= floor) return;
-        if (depth === 5) {
-          const indMean = indSum / 5, syn = permPairs + champSyn;
-          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
-          results.push({ assign: perm.map((rid,i) => ({player:rid,champ:chosen[i],role:ROLES[i]})), total, ind:indMean, syn });
-          if (results.length > keep * 4) {
-            results.sort((a,b) => b.total-a.total); results.length=keep; floor=results[keep-1].total;
-          }
-          return;
-        }
-        for (let ci=0; ci<cands[depth].length; ci++) {
-          const cid=cands[depth][ci]; if (used.has(cid)) continue;
-          let extra=0;
-          for(let i=0;i<depth;i++) extra+=champPairAdjRaw(perm[i],chosen[i],perm[depth],cid);
-          chosen.push(cid); used.add(cid);
-          search(depth+1,indSum+ind[depth][ci],champSyn+extra);
-          used.delete(cid); chosen.pop();
-        }
-      }
-      search(0,0,0);
-    }
-  }
-  results.sort((a, b) => b.total - a.total);
-  const seen = new Set(), out = [];
-  for (const r of results) {
-    const key = r.assign.map(a => a.player + a.champ).join(",");
-    if (!seen.has(key)) { seen.add(key); out.push(r); }
-    if (out.length >= topN) break;
-  }
-  return out;
-}
-
-// --- nightmare blunt rotation --------------------------------------------
-// The inverse search: the WORST comp the roster could legally field. Same
-// filters, same scoring model, every comparison flipped.
-
-// Anti-candidates: the lowest-scoring champs a player could take into a role.
-// Mastery/games ranges and draft availability remain hard filters. Prefer
-// role-viable picks; if none meet those filters, allow other eligible champs,
-// matching candidates(). An empty eligible pool always stays empty.
-// Shares candCache (distinct key prefix) so every existing cache clear works.
-function worstCandidates(riotId, role, n = 3) {
-  const ck = "worst|" + riotId + "|" + role + "|" + n;
-  if (ck in candCache) return candCache[ck];
-  const p = D.players.find(p => p.riotId === riotId);
-  const pool = new Map();
-  for (const c of p.champions) pool.set(c.championId, c);
-  for (const m of p.mastery) if (!pool.has(m.championId)) pool.set(m.championId, null);
-  const scored = [...pool.keys()].map(cid => ({
-    cid,
-    s: slotScore(riotId, cid, role),
-    roleShare: roleShare(pool.get(cid), role),
-    viable: roleViable(pool.get(cid), cid, role),
-    mastered: inMasteryRange((masteryIdx[riotId] || {})[cid] || 0),
-    inRange: inGamesRange(roleGames(pool.get(cid), role)),
-  })).filter(c => !draftUnavailable(c.cid) && !counterAvoid.has(c.cid)
-    && !uniqueExclude.has(riotId + "|" + c.cid));
-  const eligible = scored.filter(c => c.mastered && c.inRange);
-  // Fall back within hard filters, matching candidates().
-  const tiers = [eligible.filter(c => c.viable), eligible];
-  const list = (tiers.find(t => t.length) || []).sort((a, b) => a.s - b.s || b.roleShare - a.roleShare || a.cid - b.cid);
-  return candCache[ck] = list.slice(0, n).map(c => c.cid);
-}
-
-// Most NEGATIVE champ-pair adjustment per player pair — the lower-bound
-// mirror of pairBoostIdx, for pruning optimizeWorst's role permutations.
-let pairDragIdx = null;
-function buildPairDrag() {
-  pairDragIdx = {};
-  for (const key in champPairIdx) {
-    const [x, y] = key.split(":");
-    const [pa, ca] = x.split("|"), [pb, cb] = y.split("|");
-    const adj = champPairAdjRaw(pa, +ca, pb, +cb);
-    const pk = pa < pb ? pa + "|" + pb : pb + "|" + pa;
-    if (adj < (pairDragIdx[pk] || 0)) pairDragIdx[pk] = adj;
-  }
-}
-
-// optimize() with the sign flipped: minimize the comp score over every
-// 5-player subset × role permutation × anti-candidates. `floor` becomes a
-// ceiling and the pruning bound uses each slot's WORST pick plus the most
-// negative possible champ synergy.
-function optimizeWorst(topN = 10) {
-  const pool = D.players.map(p => p.riotId).filter(r => included[r]);
-  if (pool.length < 5) return [];
-  const playerSets = pool.length === 5 ? [pool] : [...combosOf(pool, 5)];
-  const keep = topN * 6;  // headroom for the dedup pass below
-  let results = [], ceiling = Infinity;
-  if (!pairDragIdx) buildPairDrag();
-  for (const five of playerSets) {
-    for (const perm of permutations(five)) {
-      const cands = perm.map((rid, i) => worstCandidates(rid, ROLES[i]));
-      if (cands.some(c => !c.length)) continue;
-      let permPairs = 0, champSynBound = 0;
-      for (let i = 0; i < 5; i++)
-        for (let j = i + 1; j < 5; j++) {
-          permPairs += playerPairAdj(perm[i], ROLES[i], perm[j], ROLES[j]);
-          const pk = perm[i] < perm[j] ? perm[i] + "|" + perm[j] : perm[j] + "|" + perm[i];
-          champSynBound += pairDragIdx[pk] || 0;
-        }
-      const ind = cands.map((cs, i) => cs.map(cid => slotScore(perm[i], cid, ROLES[i])));
-      // lower bound for this whole role assignment — skip it if it can't place
-      let minIndSum = 0;
-      for (const arr of ind) minIndSum += Math.min(...arr);
-      if (minIndSum / 5 + permPairs + champSynBound >= ceiling) continue;
-      const idx = [0, 0, 0, 0, 0];
-      while (true) {
-        const c0 = cands[0][idx[0]], c1 = cands[1][idx[1]], c2 = cands[2][idx[2]],
-              c3 = cands[3][idx[3]], c4 = cands[4][idx[4]];
-        if (c0 !== c1 && c0 !== c2 && c0 !== c3 && c0 !== c4 && c1 !== c2 &&
-            c1 !== c3 && c1 !== c4 && c2 !== c3 && c2 !== c4 && c3 !== c4) {
-          const indMean = (ind[0][idx[0]] + ind[1][idx[1]] + ind[2][idx[2]]
-            + ind[3][idx[3]] + ind[4][idx[4]]) / 5;
-          let syn = permPairs;
-          for (let i = 0; i < 5; i++)
-            for (let j = i + 1; j < 5; j++)
-              syn += champPairAdjRaw(perm[i], cands[i][idx[i]], perm[j], cands[j][idx[j]]);
-          const total = Math.max(0.05, Math.min(0.95, indMean + syn));
-          if (total < ceiling) {
-            const assign = perm.map((rid, i) => ({ player: rid, champ: cands[i][idx[i]], role: ROLES[i] }));
-            results.push({ assign, total, ind: indMean, syn });
-            if (results.length > keep * 4) {
-              results.sort((a, b) => a.total - b.total);
-              results.length = keep;
-              ceiling = results[keep - 1].total;
-            }
-          }
-        }
-        let d = 4;
-        while (d >= 0 && ++idx[d] >= cands[d].length) { idx[d] = 0; d--; }
-        if (d < 0) break;
+      for(const pick of pools[depth]) {
+        // Later picks have no larger value, so this bound also prunes the tail.
+        if(value+pick.value+suffix[depth+1]<=floor()+1e-12)break;
+        if(used.has(pick.champ))continue;
+        chosen.push(pick.champ);used.add(pick.champ);
+        search(depth+1,value+pick.value);
+        used.delete(pick.champ);chosen.pop();
       }
     }
+    search(0,0);
   }
-  results.sort((a, b) => a.total - b.total);
-  const seen = new Set(), out = [];
-  for (const r of results) {
-    const key = r.assign.map(a => a.player + a.champ).join(",");
-    if (!seen.has(key)) { seen.add(key); out.push(r); }
-    if (out.length >= topN) break;
+  return {visit,results};
+}
+
+function optimizeChamps(topN=10,fixed={}) {
+  const players=slots.map(s=>s.player);
+  if(players.some(p=>!p)||new Set(players).size!==5)return null;
+  const search=compositionSearch(topN);search.visit(players,fixed);
+  return search.results;
+}
+
+function optimizeAll(topN=10,fixed={},pinPlayer={},direction=1) {
+  const pool=D.players.map(p=>p.riotId).filter(r=>included[r]);
+  if(pool.length<5)return [];
+  const pins=Object.entries(pinPlayer).map(([r,rid])=>[ROLES.indexOf(r),rid]);
+  const search=compositionSearch(topN,direction);
+  for(const five of combosOf(pool,5)) {
+    if(pins.some(([,rid])=>!five.includes(rid)))continue;
+    for(const players of permutations(five)) {
+      if(pins.some(([i,rid])=>players[i]!==rid))continue;
+      search.visit(players,fixed);
+    }
   }
-  return out;
+  return search.results;
+}
+function optimize(topN=10,fixed={},pinPlayer={}) {
+  return optimizeAll(topN,fixed,pinPlayer);
+}
+function worstCandidates(riotId,role,n=SEARCH_CANDIDATES) {
+  return [...candidates(riotId,role)].sort((a,b)=>slotScore(riotId,a,role)-slotScore(riotId,b,role)||a-b).slice(0,n);
+}
+function optimizeWorst(topN=10,fixed={},pinPlayer={}) {
+  return optimizeAll(topN,fixed,pinPlayer,-1);
 }
 
 // --- UI ------------------------------------------------------------------
@@ -2364,7 +2179,7 @@ function answersBlock() {
   }
   if (!rows.length) return "";
   return `<div class="answers">
-    <div class="hint" style="margin:8px 0 2px">Best answers — ranked by full composition estimate when all five picks are set, otherwise by slot score. Checks up to 15 candidates per unlocked slot. Hover for observed matchup WR and sample size; tap to lock a pick.</div>
+    <div class="hint" style="margin:8px 0 2px">Best answers — ranked by full composition estimate when all five picks are set, otherwise by slot score. Checks all eligible picks in each unlocked slot. Hover for observed matchup WR and sample size; tap to lock a pick.</div>
     ${rows.join("")}</div>`;
 }
 
@@ -2802,7 +2617,7 @@ function openRiftPop(cid, pinEl) {
 
 // A slotted champ just got banned or enemy-picked: swap in the best still-
 // available candidate for that player+role instead of leaving a dead board.
-// Judged by full comp score when the board is complete (synergy counts), by
+// Judged by full comp score when the board is complete, by
 // slot score otherwise. Returns swap descriptions, or null if nothing died.
 function autoReplaceDead() {
   if (!draftMode) return null;
@@ -2815,7 +2630,7 @@ function autoReplaceDead() {
     // note says why it's dead, they decide when to give it up
     if (allyLock.get(ROLES[i]) === s.champ) continue;
     const used = new Set(slots.map(x => x.champ));
-    const cands = candidates(s.player, ROLES[i], 15).filter(c => !used.has(c));
+    const cands = candidates(s.player, ROLES[i]).filter(c => !used.has(c));
     if (!cands.length) continue;
     const full = slots.every((x, j) => x.player && (j === i || x.champ));
     let best = cands[0];
@@ -3238,42 +3053,19 @@ function renderSlots() {
       const share = playerRoleShare(s.player, role);
       comfortLine = `<div class="cstat dim" style="margin-bottom:6px">plays ${ROLE_LABEL[role].toLowerCase()} ${pct(share)} of games</div>`;
       const p = D.players.find(p => p.riotId === s.player);
-      // copy — candidates() returns its cached array, and the unshift below
-      // must not leak the hand-picked champ into the cache
-      const cands = [...candidates(s.player, role, 15)];
-      if (!cands.length && !s.champ)
-        comfortLine += `<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery / games-in-role filters</div>`;
-      if (s.champ && !cands.includes(s.champ)) cands.unshift(s.champ);
-      const opt = cid => `<option value="${cid}" ${s.champ === cid ? "selected" : ""}>${champName(cid)}</option>`;
-      const playedThere = cands.filter(cid => {
-        const e = p.champions.find(c => c.championId === cid);
-        return e && (e.roles[role] || { games: 0 }).games >= 2;
-      });
-      const metaOnly = cands.filter(cid => !playedThere.includes(cid))
-        .slice(0, Math.max(0, 6 - Math.min(playedThere.length, 4)));  // keep the list short
-      if (s.champ && !playedThere.includes(s.champ) && !metaOnly.includes(s.champ))
-        metaOnly.unshift(s.champ);  // never drop the currently selected champion
-      // Everything else the player could reasonably lock: any champ of theirs
-      // that passes the mastery/games/draft filters but didn't make the
-      // auto-candidate list (off-meta for the lane, or below the score cut).
-      const shown = new Set([...playedThere, ...metaOnly]);
-      const poolAll = new Map();
-      for (const c of p.champions) poolAll.set(c.championId, c);
-      for (const m of p.mastery) if (!poolAll.has(m.championId)) poolAll.set(m.championId, null);
-      const byScore = (a, b) => slotScore(s.player, b, role) - slotScore(s.player, a, role);
-      const extras = [...poolAll.keys()].filter(cid =>
-        !shown.has(cid)
-        && !draftUnavailable(cid)
-        && inMasteryRange((masteryIdx[s.player] || {})[cid] || 0)
-        && inGamesRange(roleGames(poolAll.get(cid), role)));
-      // champs cut from the candidate list by its display cap are still
-      // meta-viable — group them honestly instead of calling them off-meta
-      const cutViable = extras.filter(cid => roleViable(poolAll.get(cid), cid, role)).sort(byScore);
-      const offMeta = extras.filter(cid => !roleViable(poolAll.get(cid), cid, role)).sort(byScore);
-      champOpts =
-        (playedThere.length ? `<optgroup label="Plays this role">${playedThere.map(opt).join("")}</optgroup>` : "") +
-        (metaOnly.length + cutViable.length ? `<optgroup label="Meta-viable here">${[...metaOnly, ...cutViable].map(opt).join("")}</optgroup>` : "") +
-        (offMeta.length ? `<optgroup label="Off-meta / everything else">${offMeta.map(opt).join("")}</optgroup>` : "");
+      const eligible=candidates(s.player,role);
+      const retained=s.champ&&!eligible.includes(s.champ);
+      const cands=retained?[s.champ,...eligible]:eligible;
+      if(!eligible.length&&!s.champ)
+        comfortLine+=`<div class="cstat dim" style="margin-bottom:6px">no champs meet the mastery / games-in-role filters</div>`;
+      const opt=cid=>`<option value="${cid}" ${s.champ===cid?"selected":""} ${retained&&cid===s.champ?"disabled":""}>${champName(cid)}${retained&&cid===s.champ?" · outside current filters":""}</option>`;
+      const playedThere=cands.filter(cid=>(p.champions.find(c=>c.championId===cid)?.roles?.[role]?.games||0)>=2);
+      const other=cands.filter(cid=>!playedThere.includes(cid));
+      const metaOnly=other.filter(cid=>roleViable(p.champions.find(c=>c.championId===cid),cid,role));
+      const offMeta=other.filter(cid=>!metaOnly.includes(cid));
+      champOpts=(playedThere.length?`<optgroup label="Plays this role">${playedThere.map(opt).join("")}</optgroup>`:"")
+        +(metaOnly.length?`<optgroup label="Meta-viable here">${metaOnly.map(opt).join("")}</optgroup>`:"")
+        +(offMeta.length?`<optgroup label="Off-meta / everything else">${offMeta.map(opt).join("")}</optgroup>`:"");
       if (s.champ) {
         const p = D.players.find(p => p.riotId === s.player);
         const e = p.champions.find(c => c.championId === s.champ);
@@ -3373,9 +3165,10 @@ function renderSlots() {
       if (draftMode && slots[i].champ != null) allyLock.set(ROLES[i], slots[i].champ);
       else allyLock.delete(ROLES[i]);
     }
-    rankedTabs.assigned = null;  // role assignment changed — stale
-    if (activeTab === "assigned") switchTab("assigned");
     candCache = {};  // a lock changes what the other four may pick
+    const hadResults = !!rankedTabs[activeTab];
+    rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
+    if (activeTab === "assigned" || hadResults) switchTab(activeTab);
     renderSlots(); renderScore();
   }));
   document.querySelectorAll("#slots [data-lockslot]").forEach(b => b.addEventListener("click", () => {
@@ -3494,7 +3287,6 @@ function renderScore() {
       +`${v.checkedAlternatives} legal single swaps checked. ${v.scope}`;
     scoreEvidence.textContent=`Evidence: ${v.evidence.label}. Sample size is separate from the comparison grade.`;
   }
-  const synCls = sc.syn >= 0 ? "pos" : "neg";
   // Hard-counter prompts: flag the matchup and let the player decide — never
   // swap their pick out from under them over a counter alone.
   const flagged = assign.flatMap(a => {
@@ -3517,18 +3309,9 @@ function renderScore() {
     `Average of the five slot scores: each player's win rate on their champion in that role ` +
     `(shrunk toward the champ's current-patch meta WR), plus sample-shrunk role comfort, ` +
     `minus off-role penalties. "How good are these five picks in isolation?"</span></span><br>` +
-    `Synergy adjustment: <b class="${synCls}">${sc.syn >= 0 ? "▲ +" : "▼ "}${(sc.syn * 100).toFixed(1)} pts</b>` +
-    `<span class="info" tabindex="0">i<span class="tip">` +
-    `Sum over every champ pair and player duo of how your actual shared-game record deviates ` +
-    `from expectation (champ pairs vs their average meta WR, duos vs 50%), shrunk when samples ` +
-    `are small. Duo records are role-weighted: games where the pair played these exact roles ` +
-    `count fully, their games in other role combos count at ${OFF_ROLE_GAME_WEIGHT}x ` +
-    `(0 with Role WR enabled). The duo sum is also scaled to ${PAIR_OVERLAP_DISCOUNT}x, because the ten ` +
-    `pair records in a five-stack largely re-count the same games. ` +
-    `Champ pairs are pilot-attributed: only games where these two players played ` +
-    `these two champions themselves count. Green: positive shared-record adjustment. Red: negative shared-record adjustment. You ` +
-    `should not interpret these as measured causal chemistry. Caveat: pair and individual records ` +
-    `come from the same games, so hot streaks inflate both.</span></span>`;
+    `Shared-win synergy: <b>not added to score</b><span class="info" tabindex="0">i<span class="tip">`+
+    `Shared wins already contribute to individual records. Adding champion-pair and player-pair bonuses `+
+    `would count those same team results again. Pair statistics remain historical context only.</span></span>`;
   document.querySelectorAll("[data-cswap]").forEach(b => b.addEventListener("click", () => {
     counterAvoid.add(+b.dataset.cswap);
     noteEvent("drafting around " + champName(+b.dataset.cswap));
@@ -4068,9 +3851,11 @@ function uniqueList(tab, results) {
     candCache = {};
     while (out.length < RANKED_TOP) {
       const res = tab === "overall" ? optimize(1, fixed, pinPlayer)
-        : tab === "worst" ? optimizeWorst(1)
+        : tab === "worst" ? optimizeWorst(1, fixed, pinPlayer)
         : optimizeChamps(1, fixed);
       if (!res || !res.length) break;
+      // A fully locked draft has just one result; do not repeat it ten times.
+      if (out.some(r=>r.assign.every((a,i)=>a.player===res[0].assign[i].player&&a.champ===res[0].assign[i].champ))) break;
       out.push(res[0]);
       for (const a of res[0].assign) uniqueExclude.add(a.player + "|" + a.champ);
       candCache = {};
@@ -4107,9 +3892,10 @@ function switchTab(tab) {
   if (rolesLocked()) tab = "assigned";
   activeTab = tab;
   if (!rankedTabs[tab]) {
-    const res = tab === "overall" ? optimize(10)
-      : tab === "worst" ? optimizeWorst(10)
-      : optimizeChamps(10);
+    const {fixed,pinPlayer}=lockPins();
+    const res = tab === "overall" ? optimize(10,fixed,pinPlayer)
+      : tab === "worst" ? optimizeWorst(10,fixed,pinPlayer)
+      : optimizeChamps(10,fixed);
     rankedTabs[tab] = res && res.length ? res : null;
   }
   renderTabs();
@@ -4185,9 +3971,9 @@ function renderTabs() {
     : activeTab === "worst"
       ? `<span class="ghost" aria-hidden="true">👻</span> Nightmare blunt rotation<span class="info" tabindex="0">i<span class="tip">
         The optimizer in reverse: the worst realistic comps this roster could field, judged by
-        the same heuristic as the top comps (shrunk records, role comfort and synergy).
-        Role-viable picks are preferred, with eligible off-meta fallbacks. Filters and
-        bans still apply. These are the lowest scores found in a limited candidate pool,
+        the same heuristic as the top comps (shrunk records, role comfort and matchups).
+        Every eligible manual pick is considered. Filters, locks and bans still apply.
+        These are the lowest model scores,
         not proven losing compositions.</span></span>`
       : "Best compositions found";
   $("#tabAssigned").classList.toggle("active", activeTab === "assigned");
@@ -4208,24 +3994,16 @@ function renderRanked(results) {
   $("#ranked").innerHTML = `<table>
     <tr><th></th>
     <th>Score<span class="info" tabindex="0">i<span class="tip">
-      Uncalibrated recommendation score, out of 100: average slot evidence plus the
-      shared-record adjustment. This is not a probability of winning. Search considers
-      up to eight candidates per player and role; results are the best found in that pool.</span></span></th>
-    <th>Comp</th>
-    <th>Synergy<span class="info" tabindex="0">i<span class="tip">
-      How much this group's actual shared-game record shifts the estimate: champ pairs (only
-      games these two players piloted these two champs themselves) measured against their
-      average meta WR, player duos against 50%, shrunk when samples are small. Duo games in
-      the assigned role combo count fully; the duo's other games are discounted.
-      Green and red indicate positive and negative shared-record adjustments; these
-      are not measured causal effects or calibrated probabilities.</span></span></th></tr>
+      Uncalibrated recommendation score, out of 100: average slot evidence and matchup adjustments.
+      This is not a probability of winning. Search considers every eligible manual pick,
+      respecting filters, locks, players, roles and distinct champions.</span></span></th>
+    <th>Comp</th></tr>
     ${results.map((r, i) => `
       <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
         <td><span class="rank ${i === 0 && activeTab === "worst" ? "rneg" : i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
         <td><div class="wr-cell"><b>${scoreText(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
         <td class="champ-icons">${r.assign.map(a =>
           `<span class="ci" data-tip="${a.player.split("#")[0]} · ${ROLE_LABEL[a.role]}"><img src="${champIcon(a.champ)}" alt="${champName(a.champ)}"></span>`).join("")}</td>
-        <td><span class="syn-chip ${r.syn >= 0 ? "pos" : "neg"}">${r.syn >= 0 ? "▲ +" : "▼ "}${(r.syn * 100).toFixed(1)} pts</span></td>
       </tr>`).join("")}
   </table>`;
   document.querySelectorAll(".comp-row").forEach(tr =>
@@ -4448,7 +4226,7 @@ function applyData(players, meta, profiles) {
   dAdjCache = {};
   D = players; META = meta; PROFILES = profiles;
   masteryIdx = {}; champPairIdx = {}; playerPairIdx = {};
-  indCache = {}; candCache = {}; pairBoostIdx = null; pairDragIdx = null;
+  indCache = {}; candCache = {};
   for (const k of Object.keys(roleShareCache)) delete roleShareCache[k];
   rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
   // Data Dragon lists game-mode variant units (Jade_Annie, id 60001, …) that

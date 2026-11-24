@@ -1,17 +1,14 @@
 # Comp Builder
 
 Team composition optimizer for a fixed group of League of Legends players.
-It blends three signals into a five-player composition score:
+It combines personal champion/role records with a current-patch role-meta prior,
+role comfort, and available draft matchup evidence. Mastery and role-game filters
+control eligibility. The optimizer and manual picker use the same complete pool,
+including low-sample and off-meta picks.
 
-- **Personal records** — each player's champion win rates by role and queue
-  (solo/flex/clash), pulled from the Riot API
-- **Current-patch meta** — per-champion, per-role win rates from ~1.3M ranked
-  games (OP.GG), used as the Bayesian prior so small samples don't lie
-- **Synergy** — the group's actual shared-game record, measured against
-  expectation: player duos (role-weighted — games in the assigned role combo
-  count fully, the duo's other games are discounted), plus pilot-attributed
-  champ pairs (only games where those two players piloted those two
-  champions themselves)
+Shared matches already contribute to personal records. Additional champion-pair
+and player-pair win-rate bonuses are excluded from production scoring to avoid
+counting that team success repeatedly; the old bonuses remain offline comparisons.
 
 The exact weights, shrinkage constants, and every adjustment term are
 documented in [SCORING.md](SCORING.md).
@@ -84,8 +81,8 @@ the same way if you ever change the roster or want to reset state.
 ## Scoring and validation
 
 The headline is a **composition score out of 100**, not a calibrated win
-probability. Current tuning uses a 10-game Emerald+ role prior and a 0.4
-synergy scale. Mastery gates familiarity rather than adding score points;
+probability. Current tuning uses a 10-game Emerald+ role prior and no additive
+shared-win synergy bonus. Mastery gates familiarity rather than adding score points;
 role comfort is shrunk for small samples. The relative grade compares eligible
 single-pick alternatives for the same squad and roles; evidence strength is
 shown separately. These labels do not establish a probability of winning.
@@ -95,7 +92,7 @@ for the historical audit.
 The **Games in role** range counts this player's games on the champion in the
 assigned role, within the selected queue view. Both bounds are hard filters.
 Cards explain the role sample, prior and score adjustments. The optimizer
-reports the best compositions found within its candidate pool.
+searches all eligible manual picks with the same filters and draft constraints.
 
 With the **League bridge running**, complete live drafts automatically save
 pregame scores to Cloudflare for evaluation, even when the website is closed.

@@ -107,7 +107,7 @@ test('stronger prior moves real individual records toward their role meta prior'
   console.log(`Real-record sensitivity, all player/champion/role combinations: median ${diffs[Math.floor(diffs.length*.5)].toFixed(3)}pp; p90 ${diffs[Math.floor(diffs.length*.9)].toFixed(3)}pp absolute individual change (not an accuracy estimate).`);
 });
 
-test('both synergy terms are reduced by exactly 20% on real records', () => {
+test('legacy shadow pair model retains its historical 0.4 scale', () => {
   const now = context();
   const old = context({}, source.replace(/const SYNERGY_WEIGHT = 0\.4;/, 'const SYNERGY_WEIGHT = 0.5;'));
   assert.equal(run(now, 'SYNERGY_WEIGHT'), 0.4);

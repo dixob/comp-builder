@@ -4,22 +4,21 @@ Compy ranks candidate compositions with a **score out of 100**. It does not
 estimate a calibrated match-win probability. Historical player and meta win
 rates remain percentages; score adjustments are displayed as points.
 
-The current model is `2026-11-24.3`, implemented in the scoring section of
+The current model is `2026-11-24.4`, implemented in the scoring section of
 [index.html](index.html). The [review](SCORING_REVIEW.md) records the original
 audit; [EVALUATION.md](EVALUATION.md) explains how to test predictions against
 future outcomes. The current coefficients are conservative heuristics, not
 learned or validated accuracy improvements.
 
-Version `.3` keeps those numerical weights. It makes draft recommendations use
-the full composition objective, replaces absolute score verdicts with a bounded
-single-swap comparison, separates evidence labels, and records raw components
-for prospective model validation.
+Version `.4` searches every eligible manual pick and removes additive shared-win
+pair bonuses. Those matches already affect personal records; summing their ten
+champion pairs and ten player pairs counted correlated success again. The prior
+pair model is retained only as a prospective comparison, not as score points.
 
 ## Composition score
 
 ```text
 raw = mean(individual score + draft matchup residual for each slot)
-      + sum(champion-pair and player-pair adjustments over all ten pairs)
 score = 100 × clamp(raw, 0.05, 0.95)
 ```
 
@@ -31,10 +30,10 @@ comparisons do not lose differences at the display limits.
 ## Relative grade and draft answers
 
 The relative grade holds the **same five players and role assignments** fixed.
-For each unlocked slot, it checks up to 15 candidates from that player's filtered
-role pool, changing one champion at a time. It scores each resulting composition
-with the complete formula above, including all pair adjustments and known draft
-matchups, using the raw value before display limits.
+For each unlocked slot, it checks every eligible candidate from that player's
+filtered role pool, changing one champion at a time. It scores each resulting
+composition with the complete formula above, including known draft matchups,
+using the raw value before display limits.
 
 The label reports either the best available one-swap improvement in points or
 **Best among checked single swaps**. Improvements below 0.05 points are treated
@@ -72,8 +71,8 @@ The prior is OP.GG's current-patch NA Emerald+ Solo/Duo champion win rate in
 the assigned role when at least 100 meta games are available. Missing role
 coverage falls back to the champion's overall win rate; missing champion data
 falls back to 50%. No extra penalty is applied merely because the source omits
-a lane. Cards label each fallback. Role viability is a separate eligibility
-preference, not inferred from that fallback alone.
+a lane. Cards label each fallback. Role viability is a descriptive picker
+label, not an eligibility filter.
 
 Both local fetch and worker explicitly request the configured tier, defaulting
 to `emerald_plus`. Exact `emerald` is a different population. Flex-only changes
@@ -131,33 +130,34 @@ uncertainty in the meta baseline, role assignment or opponent selection.
 A flag alone never changes the score or removes a pick. Explicit bans, enemy
 picks, fearless exclusions and manual avoidance affect availability.
 
-## Synergy
+## Shared wins and legacy synergy
 
-Pair adjustments remain strongly shrunk and now use a common scale of 0.4,
-down from 0.5. Both positive and negative effects are 20% smaller.
+Production adds **zero champion-pair or player-pair bonus**. Each slot's personal
+record still contains its actual shared matches, but slot scores are averaged
+rather than accumulating a bonus for every teammate pair. This removes the
+extra pairwise multiplication; it does not make teammates' histories independent
+or establish causal chemistry.
 
-Pilot-attributed champion-pair records count only those two players on those
-two champions on the same team:
+The old `.3` pair formulas are retained exclusively for evaluation:
 
 ```text
 expected = mean(overall champion meta WRs)
-adj = (shrunk(wins, games, K=100, prior=expected) − expected)
-      × 0.4 × games / (games + 10)
+championPair = (shrunk(wins, games, K=100, prior=expected) − expected)
+              × 0.4 × games / (games + 10)
+playerPair = (shrunk(weightedWins, weightedGames, K=20, prior=0.5) − 0.5)
+             × 0.4 × 0.25 × weightedGames / (weightedGames + 10)
 ```
 
-Player-pair records count games in the assigned role combination fully, and
-other role combinations at 0.3 (zero in strict Role WR mode):
+Champion pairs are pilot-attributed. Player-pair role combinations receive full
+weight in the assigned roles and 0.3 elsewhere (zero elsewhere in strict mode).
+The historical 0.25 discount did not deduplicate overlapping evidence.
 
-```text
-adj = (shrunk(weightedWins, weightedGames, K=20, prior=0.5) − 0.5)
-      × 0.4 × 0.25 × weightedGames / (weightedGames + 10)
-```
-
-The 0.25 factor reduces overlap among ten pair rows from the same five-stack.
-It does not eliminate correlated evidence or identify causal chemistry. The
-champion-pair expectation also does not control for pilots or assigned roles.
-These limitations remain visible in the review; the prospective log includes
-a no-synergy comparison instead of asserting that synergy improves accuracy.
+Pregame records save the old sums as `legacyPairAdjustments` and frozen score
+variants `legacyPairSynergy`, `halfLegacyPairSynergy`, `legacyChampionOnly` and
+`legacyPlayerOnly`. Evaluation compares these with the current score on the
+same actual matches, with one observed outcome per match. Reintroducing synergy
+requires a model that controls for individual strength and repeated match
+identity, followed by validation on later matches.
 
 ## Filters and search
 
@@ -167,22 +167,26 @@ off-role games do not satisfy this filter. Old all-role slider settings reset
 rather than changing meaning silently.
 
 Mastery and role-game ranges, bans and draft exclusions are hard candidate
-filters. Normal and worst-comp fallbacks stay inside them. A currently chosen
-manual pick can stay visible outside the role-game range with a warning;
-explicit draft locks remain manual constraints.
+filters. Manual selection, full search, assigned-role search, worst search and
+single-swap recommendations share the same pool: the union of every champion
+in the player's history and mastery data, filtered by the active constraints.
+There is no eight-pick cap, 15-pick comparison cap, mastery-list cutoff, or
+minimum-sample/role-viability preference that hides otherwise eligible choices.
 
-Role viability prefers a personal role sample of at least ten games or a meta
-role with at least 100 games and 10% role share. Normal search prefers viable
-picks with at least five games, then viable picks, then other eligible picks.
-The last fallback can include off-meta choices. Strict mode uses in-role games
-for the five-game preference; otherwise it uses all champion games.
+Role viability labels picks with a personal role sample of at least ten games
+or a meta role with at least 100 games and 10% role share. Low-sample and off-meta
+choices remain searchable; scores still reflect their evidence and role penalty.
+A selected pick outside current filters stays visible as a disabled option with
+a warning. Explicit draft locks preserve that already-selected pick unless it
+is unavailable or explicitly avoided; locks do not silently change filters.
 
-Both full and assigned-role search consider up to **eight candidates per
-player/role**. Full search uses optimistic branch bounds to avoid unnecessary
-combinations. It reports the best found in that pool, not a global optimum over
-every champion. Role share breaks equal scores lexicographically; it no longer
-adds an undisclosed two-point candidate-order bonus. Worst-comp search remains
-a deliberately limited candidate search too.
+Full search enumerates all included five-player squads and role assignments.
+Assigned-role search holds the five players and roles fixed. Both use additive
+optimistic branch bounds to find the highest raw scores across all eligible
+picks, enforcing distinct champions and locks. Worst search uses the same pool
+and constraints in reverse. Role share and champion ID break candidate ties,
+without changing score points. No-repeat lists exclude prior player/champion
+choices between rows while retaining explicit locks.
 
 Cards show observed role games, effective games, prior source and weight, role
 comfort, off-role penalty and draft residual. Sample labels describe evidence
@@ -212,8 +216,10 @@ Exports retain the separate unclipped component means/sums, raw total, grade
 comparison, up to three one-swap alternatives and optional pregame side. Saved
 alternatives have no observed outcomes. The current-score ablations remove
 terms from the raw total before applying the display clamp. Additional comparisons
-include no matchup, no role penalty, each synergy type removed separately,
-half synergy, 20/40-game prior strengths and a player-record-only baseline.
+include no matchup, no role penalty, 20/40-game prior strengths, a player-record
+baseline and the legacy pair variants described above. Compatibility variants
+`noSynergy`, `noChampionSynergy`, `noPlayerSynergy` and `synergyHalf` now equal
+the current score because production pair contributions are zero.
 These are frozen diagnostic comparisons, not endorsed replacements.
 
 The offline validation script can fit a small regularized logistic model on

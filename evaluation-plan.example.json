@@ -4,9 +4,9 @@
   "testFrom": "2027-02-01T00:00:00Z",
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
-  "modelVersion": "2026-11-24.3",
+  "modelVersion": "2026-11-24.4",
   "capturePolicy": "server-standard-v1",
-  "comparisonScores": ["current", "noSynergy", "shrunkPersonal", "metaOnly", "constant50"],
+  "comparisonScores": ["current", "legacyPairSynergy", "halfLegacyPairSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",
   "requireCompleteHistory": true,
   "notes": "Example only. Choose and freeze dates and a collection stopping rule before inspecting comparisons. A first 100-game pilot checks the pipeline and large errors; it does not establish small accuracy gains. Keep later confirmation data untouched."

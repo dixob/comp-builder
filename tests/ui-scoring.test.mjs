@@ -41,11 +41,12 @@ test('matchup expectation is neutral for equal champions and symmetric for actua
 test('local prospective records capture chosen comp and pregame ablations without outcomes',()=>{
  const c=context();run(c,`slots=D.players.slice(0,5).map(p=>({player:p.riotId,champ:null}));`);
  const record=run(c,`predictionRecord(optimizeChamps(1)[0].assign)`);
- assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.3');
+ assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.4');
  assert(!('outcome'in record));assert(!('win'in record));assert.equal(record.scores.noMastery,record.scores.current);
  for(const value of Object.values(record.scores))assert(value>=.05&&value<=.95);
  assert(record.comp.every(p=>p.puuid&&p.puuidHistory.includes(p.puuid)));
- assert(record.candidates.every(p=>p.championIds.length<=8));
+ assert.equal(record.settings.searchCandidates,'all-eligible');
+ for(const p of record.candidates)assert.deepEqual(Array.from(p.championIds),Array.from(run(c,`candidates(${JSON.stringify(p.riotId)},${JSON.stringify(p.role)})`)));
  const validation=spawnSync('python3',['-c','import json,sys; from scripts.evaluate_predictions import validate_record; validate_record(json.load(sys.stdin))'],{cwd:root,input:JSON.stringify(record),encoding:'utf8'});
  assert.equal(validation.status,0,validation.stderr);
 });
@@ -61,7 +62,7 @@ test('single-swap recommendations rank full compositions, reject duplicates, and
  const c=context();setRecordedBoard(c);
  const before=run(c,'JSON.stringify(slots)');
  const rows=run(c,`ROLES.map(role=>({role,options:replacementRecommendations(board,role),
-  direct:candidates(board.find(a=>a.role===role).player,role,15)
+  direct:candidates(board.find(a=>a.role===role).player,role)
     .filter(cid=>!board.some(a=>a.champ===cid))
     .map(cid=>({cid,raw:compScore(board.map(a=>({...a,champ:a.role===role?cid:a.champ}))).rawTotal}))}))`);
  assert(rows.some(r=>r.options.length));
@@ -107,7 +108,7 @@ test('relative grade includes current board, checks only unlocked single swaps, 
  const grade=run(c,'singleSwapComparison(board)');
  const count=run(c,'ROLES.reduce((n,r)=>n+replacementRecommendations(board,r).length,0)');
  assert.equal(grade.checkedAlternatives,count);assert(count>0);
- assert(grade.bestRawTotal>=grade.currentRawTotal);assert.match(grade.scope,/15.*unlocked/);
+ assert(grade.bestRawTotal>=grade.currentRawTotal);assert.match(grade.scope,/all eligible.*unlocked/);
  assert.equal(grade.evidence.historyComplete,players.history.complete===true);
  assert.equal(grade.evidence.minRoleGames,run(c,'Math.min(...board.map(a=>roleGames(D.players.find(p=>p.riotId===a.player).champions.find(ch=>ch.championId===a.champ),a.role)))'));
  assert(!/Strong score|Higher score|Moderate score|Mixed score|Lower score/.test(grade.label));
@@ -160,10 +161,10 @@ test('pregame components and shadow variants reconcile with recorded evidence',(
  assert.match(record.alternativesNotice,/no observed outcome/);
 });
 
-test('fixed squad and roles keep comfort and player synergy constant across champion changes',()=>{
+test('fixed squad and roles keep comfort and legacy player adjustment constant across champion changes',()=>{
  const c=context();setRecordedBoard(c);
  const values=run(c,`[predictionRecord(board),...singleSwapComparison(board).alternatives.slice(0,10).map(a=>predictionRecord(a.comp))]
-  .map(r=>({comfort:r.components.comfort,playerSynergy:r.components.playerSynergy}))`);
+  .map(r=>({comfort:r.components.comfort,playerSynergy:r.legacyPairAdjustments.player}))`);
  assert(values.length>1);
  for(const v of values){close(v.comfort,values[0].comfort);close(v.playerSynergy,values[0].playerSynergy);}
 });
@@ -212,24 +213,36 @@ test('matchup advisory uses residual evidence rather than raw 55 percent alone',
  run(c,`for(const table of Object.values(counterIdx))for(const rec of Object.values(table)){const rate=rec.win/rec.play;rec.play=19;rec.win=rate*19;}dAdjCache={};`);
  assert.equal(run(c,'hardCounters(counts.cid,"MIDDLE").length'),0);
 });
-test('wider full search retains or improves best found on real five-player squad',()=>{
- const narrow=context(source.replace('const SEARCH_CANDIDATES = 8;','const SEARCH_CANDIDATES = 3;'));
- const wide=context();
- const setup=`for(const [i,p]of D.players.entries())included[p.riotId]=i<5;`;
- run(narrow,setup);run(wide,setup);
- const before=run(narrow,'optimize(1)[0]'),after=run(wide,'optimize(1)[0]');
- assert(after.total>=before.total-1e-12);
- wide.assignment=after.assign;assert(Math.abs(run(wide,'compScore(assignment).total')-after.total)<1e-12);
-});
-test('full search pruning agrees with exhaustive fixed-role enumeration on real squad',()=>{
- const c=context(source.replace('const SEARCH_CANDIDATES = 8;','const SEARCH_CANDIDATES = 3;'));
+test('optimized boards cannot be improved by an eligible manual single swap',()=>{
+ const c=context();
  run(c,`for(const [i,p]of D.players.entries())included[p.riotId]=i<5;`);
- const pruned=run(c,'optimize(1)[0].total');
- const exhaustive=run(c,`(()=>{let best=-Infinity;const pool=D.players.slice(0,5).map(p=>p.riotId);
-  for(const perm of permutations(pool)){slots=perm.map(player=>({player,champ:null}));
-   const r=optimizeChamps(1);if(r?.length)best=Math.max(best,r[0].total);}
-  return best;})()`);
- assert(Math.abs(pruned-exhaustive)<1e-12);
+ for(const strict of [false,true]){
+  run(c,`strictRole=${strict};indCache={};candCache={};board=optimize(1)[0].assign;`);
+  assert(run(c,'singleSwapComparison(board).alternatives.every(a=>a.rankScore<=compScore(board).rawTotal+1e-12)'));
+  run(c,'slots=board.map(a=>({player:a.player,champ:null}));board=optimizeChamps(1)[0].assign;');
+  assert(run(c,'singleSwapComparison(board).alternatives.every(a=>a.rankScore<=compScore(board).rawTotal+1e-12)'));
+ }
+});
+test('best and worst branch bounds agree with independent exhaustive enumeration',()=>{
+ const c=context();
+ // Restrict actual recorded pools to three picks solely to make exhaustive
+ // enumeration small. Scores and outcomes remain the real recorded values.
+ run(c,`for(const [i,p]of D.players.entries())included[p.riotId]=i<5;
+  allEligible=candidates;candidates=(rid,role)=>allEligible(rid,role).slice(0,3);`);
+ const expected=run(c,`(()=>{
+  const scores=[],pool=D.players.slice(0,5).map(p=>p.riotId);
+  for(const perm of permutations(pool)){
+   const choices=perm.map((p,i)=>candidates(p,ROLES[i]));
+   for(const a of choices[0])for(const b of choices[1])for(const cc of choices[2])for(const d of choices[3])for(const e of choices[4]){
+    const champs=[a,b,cc,d,e];if(new Set(champs).size!==5)continue;
+    scores.push(compScore(perm.map((player,i)=>({player,role:ROLES[i],champ:champs[i]}))).rawTotal);
+   }
+  }
+  return scores.sort((a,b)=>b-a);
+ })()`);
+ assert(expected.length>10);
+ const best=run(c,'optimize(10)'),worst=run(c,'optimizeWorst(10)');
+ for(let i=0;i<10;i++){close(best[i].rawTotal,expected[i]);close(worst[i].rawTotal,expected[expected.length-1-i]);}
 });
 test('score UI uses points and preserves historical WR',()=>{
  assert(html.includes('<h2>Composition score</h2>'));
@@ -238,15 +251,97 @@ test('score UI uses points and preserves historical WR',()=>{
  assert(html.includes('const pct = x => (x * 100).toFixed(1) + "%";'));
 });
 
+test('manual picker and optimizer expose the same complete filtered pool',()=>{
+ const c=context(),container={innerHTML:''};
+ c.document.querySelector=selector=>selector==='#slots'?container:null;
+ c.document.querySelectorAll=()=>[];
+ run(c,'renderRift=()=>{};');
+ let lowSample=0,offMeta=0,masteryBeyondTwelve=0;
+ for(const p of players.players){
+  c.playerId=p.riotId;
+  run(c,'slots=ROLES.map(()=>({player:playerId,champ:null}));renderSlots();');
+  const selects=[...container.innerHTML.matchAll(/<select[^>]*data-kind="champ"[^>]*>([\s\S]*?)<\/select>/g)];
+  assert.equal(selects.length,5);
+  for(let i=0;i<5;i++){
+   const shown=[...selects[i][1].matchAll(/<option value="(\d+)"/g)].map(m=>+m[1]).sort((a,b)=>a-b);
+   const eligible=Array.from(run(c,`candidates(playerId,ROLES[${i}])`)).sort((a,b)=>a-b);
+   assert.deepEqual(shown,eligible);
+   const expected=[...new Set([...p.champions.map(ch=>ch.championId),...p.mastery.map(m=>m.championId)])]
+    .filter(cid=>(p.mastery.find(m=>m.championId===cid)?.points||0)>=30000).sort((a,b)=>a-b);
+   assert.deepEqual(shown,expected,'No hidden sample tier, viability tier or cap');
+   for(const cid of shown){
+    const ch=p.champions.find(ch=>ch.championId===cid);
+    if((ch?.games||0)<5)lowSample++;
+    if(!run(c,`roleViable(D.players.find(p=>p.riotId===playerId).champions.find(ch=>ch.championId===${cid}),${cid},ROLES[${i}])`))offMeta++;
+    if(p.mastery.findIndex(m=>m.championId===cid)>=12)masteryBeyondTwelve++;
+   }
+  }
+ }
+ assert(lowSample>0&&offMeta>0&&masteryBeyondTwelve>0);
+});
+
+test('repeated pair aggregates cannot change production scores or optimized picks',()=>{
+ const c=context();setRecordedBoard(c);
+ const before=JSON.parse(JSON.stringify(run(c,'predictionRecord(board)')));
+ const optimized=JSON.stringify(run(c,'optimizeChamps(3)'));
+ assert.notEqual(before.legacyPairAdjustments.total,0);
+ // Mechanically repeat real aggregate counts; do not create match outcomes.
+ run(c,`for(const rec of [...Object.values(champPairIdx),...Object.values(playerPairIdx)]){
+  rec.games*=10;rec.wins*=10;
+  for(const role of Object.values(rec.roles||{})){role.games*=10;role.wins*=10;}
+ }`);
+ const after=JSON.parse(JSON.stringify(run(c,'predictionRecord(board)')));
+ assert.equal(after.scores.current,before.scores.current);
+ assert.equal(JSON.stringify(run(c,'optimizeChamps(3)')),optimized);
+ assert.notEqual(after.scores.legacyPairSynergy,before.scores.legacyPairSynergy);
+ assert.equal(after.components.championSynergy,0);assert.equal(after.components.playerSynergy,0);
+ const clip=x=>Math.max(.05,Math.min(.95,x));
+ close(after.scores.legacyPairSynergy,clip(after.components.rawTotal+after.legacyPairAdjustments.total));
+ close(after.scores.halfLegacyPairSynergy,clip(after.components.rawTotal+.5*after.legacyPairAdjustments.total));
+ run(c,'champPairIdx={};playerPairIdx={};');
+ assert.equal(run(c,'compScore(board).total'),before.scores.current);
+});
+
+test('all search modes preserve locks, bans and unique champion constraints',()=>{
+ const c=context();setRecordedBoard(c);
+ run(c,`for(const [i,p]of D.players.entries())included[p.riotId]=i<5;
+  draftMode=true;allyLock.set('TOP',board[0].champ);
+  manualBans.add(board[1].champ);counterAvoid.add(board[2].champ);
+  uniqueExclude.add(board[3].player+'|'+board[3].champ);candCache={};
+  fixed={TOP:board[0].champ};pins={TOP:board[0].player};`);
+ for(const expression of ['optimizeChamps(3,fixed)','optimize(3,fixed,pins)','optimizeWorst(3,fixed,pins)']){
+  c.results=run(c,expression);assert(c.results.length>0);
+  assert(run(c,`results.every(r=>r.assign[0].champ===fixed.TOP&&r.assign[0].player===pins.TOP
+   &&new Set(r.assign.map(a=>a.champ)).size===5
+   &&r.assign.every(a=>!manualBans.has(a.champ)&&!counterAvoid.has(a.champ)&&!uniqueExclude.has(a.player+'|'+a.champ)))`));
+ }
+});
+
+test('manual draft changes invalidate cached options before refreshing ranked results',()=>{
+ const c=context();setRecordedBoard(c);
+ const container={innerHTML:''};let change;
+ c.document.querySelector=selector=>selector==='#slots'?container:null;
+ c.document.querySelectorAll=selector=>selector==='#slots select'?[{addEventListener(event,handler){change=handler;}}]:[];
+ run(c,`draftMode=true;activeTab='overall';renderRift=()=>{};renderScore=()=>{};renderTabs=()=>{};
+  rankedTabs.overall=optimize(3);replacement=replacementRecommendations(board,'TOP')[0].cid;
+  renderSlots();`);
+ assert.equal(typeof change,'function');
+ change({target:{dataset:{slot:'0',kind:'champ'},value:String(run(c,'replacement'))}});
+ assert(run(c,`rankedTabs.overall.length>0&&rankedTabs.overall.every(r=>r.assign[0].champ===replacement
+  &&r.assign[0].player===slots[0].player&&!r.assign.slice(1).some(a=>a.champ===replacement))`));
+ run(c,`for(const [i,role]of ROLES.entries())allyLock.set(role,slots[i].champ);candCache={};`);
+ const results=run(c,`optimizeChamps(1,lockPins().fixed)`);assert.equal(results.length,1);c.results=results;
+ assert.equal(run(c,`uniqueList('assigned',results).length`),1);
+});
+
 // Explicit benchmark mode uses only recorded roster data and real settings.
 if(process.env.COMPY_BENCHMARK){
- for(const size of [3,8]){
-  const c=context(source.replace('const SEARCH_CANDIDATES = 8;',`const SEARCH_CANDIDATES = ${size};`));
+ for(const floor of [30000,0]){
+  const c=context();run(c,`masteryMin=${floor};candCache={};`);
   const start=performance.now(),r=run(c,'optimize(10)');
-  console.log(JSON.stringify({players:players.players.length,candidates:size,elapsedMs:Math.round(performance.now()-start),best:r[0]?.total,results:r.length}));
+  console.log(JSON.stringify({players:players.players.length,candidates:'all eligible',masteryMin:floor,elapsedMs:Math.round(performance.now()-start),best:r[0]?.total,results:r.length}));
  }
 }
-
 
 test('worker and browser produce identical scores, components and evidence for both role modes',()=>{
  for(const strict of [false,true]) {
@@ -262,7 +357,7 @@ test('worker and browser produce identical scores, components and evidence for b
   const expected=JSON.parse(JSON.stringify(run(c,'predictionRecord(board,capturedAt)')));
   const scorer=createScorer(players,meta,run(c,'draft'),{strictRole:strict});
   const actual=scorer.record(run(c,'counterIdx'),capturedAt);
-  for(const field of ['scores','components','evidence','comp','candidates','gradeComparison','meta'])
+  for(const field of ['scores','components','legacyPairAdjustments','evidence','comp','candidates','gradeComparison','meta'])
    assert.deepEqual(JSON.parse(JSON.stringify(actual[field])),expected[field],field);
   assert.equal(actual.settings.capturePolicy,'server-standard-v1');
   assert.equal(actual.settings.flexOnly,false);

@@ -127,9 +127,9 @@ file for that collection period.
   "testFrom": "2027-02-01T00:00:00Z",
   "testUntil": "2027-03-01T00:00:00Z",
   "queue": 440,
-  "modelVersion": "2026-11-24.3",
+  "modelVersion": "2026-11-24.4",
   "capturePolicy": "server-standard-v1",
-  "comparisonScores": ["current", "noSynergy", "shrunkPersonal", "metaOnly", "constant50"],
+  "comparisonScores": ["current", "legacyPairSynergy", "halfLegacyPairSynergy", "shrunkPersonal", "metaOnly", "constant50"],
   "primaryMetric": "logLoss",
   "requireCompleteHistory": true,
   "notes": "Next 100 eligible Flex games; frozen before outcomes."
@@ -221,11 +221,15 @@ For each scoring-model version, the evaluator reports:
 - Paired differences between the current score and each reference, with descriptive 95% bootstrap intervals when at least two UTC day blocks exist. Whole days are resampled, keeping each actual match as one outcome. Negative differences favor the current score. Dependence across days and small samples can still make these intervals overconfident.
 - History-completeness and data-readiness counts, including missing information. Readiness is about the available data, not certification that a model is accurate.
 
-Current browser exports include `current`, `previous`, `metaOnly`,
+Current background records include `current`, `previous`, `metaOnly`,
 `shrunkPersonal`, `playerOnly`, `noSynergy`, `noMastery`, `noComfort`,
 `noMatchup`, `noRolePenalty`, `noChampionSynergy`, `noPlayerSynergy`,
-`priorK20`, `priorK40`, and `synergyHalf`. Some variants may be identical after a
-feature is disabled; that is expected. The saved scores must be generated at
+`priorK20`, `priorK40`, `synergyHalf`, `legacyPairSynergy`,
+`halfLegacyPairSynergy`, `legacyChampionOnly`, and `legacyPlayerOnly`.
+Version `.4` excludes pair bonuses from production. Its `noSynergy`,
+`noChampionSynergy`, `noPlayerSynergy` and `synergyHalf` compatibility variants
+equal `current`; use the legacy variants to test additive pair bonuses.
+The raw old pair sums are saved separately as `legacyPairAdjustments`. The saved scores must be generated at
 capture time. Do not populate missing variants later from updated data.
 
 Different model versions are never pooled into a single “current” metric. A small or empty test split should lead to more prospective collection, not a stronger claim. Do not infer recommendation quality from probability metrics alone: an unplayed alternative still has no observed result.
@@ -233,7 +237,7 @@ Different model versions are never pooled into a single “current” metric. A 
 ## Validate a learned alternative offline
 
 `scripts/validate_scoring_models.py` uses the same actual-match joins, frozen
-plan and cohort filters. It requires the raw components captured by model
+plan and cohort filters. It requires the raw components captured since model
 `2026-11-24.3`; it never reconstructs missing features from today's aggregates.
 Earlier exports still work with the general evaluator, but cannot supply
 uncaptured components for this comparison.
@@ -243,7 +247,9 @@ period, with one observed outcome per match. It learns contributions from
 personal, meta and player records, role comfort, role penalty, matchup residual,
 champion synergy and player synergy. This tests whether the existing signals
 help predict outcomes without treating ten pair records as ten independent
-wins. It is not a hierarchical player model and does not infer unavailable
+wins. Version `.4` records zero production pair components, so this fit cannot
+learn pair effects from that cohort; the frozen legacy score variants provide
+the direct old-versus-new comparison. It is not a hierarchical player model and does not infer unavailable
 opponent skill.
 
 ```text
