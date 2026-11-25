@@ -1263,10 +1263,10 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     try {
       if (['/data', '/refresh', '/seed', '/evaluation', '/'].includes(url.pathname))
-        return stateOwner(env).fetch(req);
-      if (url.pathname === "/chat" && req.method === "POST") return chat(env, req);
-      if (url.pathname === "/counters") return counters(env, url);
-      if (url.pathname === "/fearless") return fearless(env, url);
+        return await stateOwner(env).fetch(req);
+      if (url.pathname === "/chat" && req.method === "POST") return await chat(env, req);
+      if (url.pathname === "/counters") return await counters(env, url);
+      if (url.pathname === "/fearless") return await fearless(env, url);
       if (url.pathname === "/draft" || url.pathname === "/draft/ws") {
         // Deliberately unauthenticated, unlike /seed: requiring the admin
         // token here meant every new machine needed a secret copied by hand
@@ -1274,7 +1274,7 @@ export default {
         // state — worst case someone who finds the URL posts a fake draft —
         // and the DraftHub's single-owner arbitration already handles
         // conflicting feeders.
-        return env.DRAFT.get(env.DRAFT.idFromName("main")).fetch(req);
+        return await env.DRAFT.get(env.DRAFT.idFromName("main")).fetch(req);
       }
       return json({ error: "not found" }, 404);
     } catch (e) {

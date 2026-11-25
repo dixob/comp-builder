@@ -455,6 +455,8 @@
   .page-tabs::-webkit-scrollbar { display: none; }
   .page-tabs button { font-size: 13px; padding: 7px 16px; white-space: nowrap; flex: none; }
   table { width: 100%; border-collapse: separate; border-spacing: 0 var(--sp-1); font-size: 14px; }
+  .table-action { border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; padding: 0; cursor: pointer; }
+  .table-action:focus-visible, .mh-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   th {
     text-align: left; color: var(--text-muted); font-weight: 500; font-size: 11px;
     letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 10px;
@@ -1055,6 +1057,7 @@
     .slot > .cstat { grid-area: stat; }
     .slot > .cstat.dim { display: none; }  /* role-comfort hint — desktop only */
     .slot .cstat br { display: none; }
+    .slot .cstat details br { display: initial; }
     .slot .cstat .dim, .slot .cstat .scorechip { margin-left: 8px; }
     .slot .scorechip { margin-top: 0; }
     /* 16px stops iOS Safari's zoom-on-focus */
@@ -1156,7 +1159,7 @@ const OFF_ROLE_GAME_WEIGHT_STRICT = 0.15;
 const ROLE_COMFORT_WEIGHT = 0.12;    // bonus/penalty for how much of the player's games are in this role
 const ROLE_COMFORT_PRIOR = 20;     // shrink role share for small histories
 const SEARCH_CANDIDATES = Infinity; // all eligible manual picks; no search cutoff
-const MODEL_VERSION = "2026-11-24.5";
+const MODEL_VERSION = "2026-11-24.6";
 const MIN_CHAMP_GAMES = 5;           // profile evidence label only; never a search filter
 const OWN_ROLE_VIABLE_GAMES = 10;    // personal games in a role needed to trust a pick the meta doesn't play there
 
@@ -1177,16 +1180,23 @@ const CS_MIN_PLAYER = "BigBellyBobby#NA1"; // show cs/min in this player's slot 
 // filtered from a player's candidate list without fallback exceptions.
 // Default 30k minimum; a max slider at MASTERY_OFF means no upper cap.
 const MASTERY_OFF = 200000;
-let masteryMin = +(localStorage.getItem("masteryFloor") ?? 30000);
-let masteryMax = +(localStorage.getItem("masteryMax") ?? MASTERY_OFF);
+// Persisted settings may predate the current controls or contain invalid data.
+// Keep the visible range and the candidate filter on the same finite bounds.
+function storedNumber(key, fallback, min = 0, max = Infinity) {
+  const raw = localStorage.getItem(key);
+  const value = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+let masteryMin = storedNumber("masteryFloor", 30000, 0, MASTERY_OFF);
+let masteryMax = Math.max(masteryMin, storedNumber("masteryMax", MASTERY_OFF, 0, MASTERY_OFF));
 const inMasteryRange = pts => pts >= masteryMin && (masteryMax >= MASTERY_OFF || pts <= masteryMax);
 // Games-in-role range: count only this champion in the assigned role, in
 // the selected queue view. Neither strict scoring nor search can
 // relax this filter. New storage keys avoid reinterpreting total-game limits.
 // A max slider at MAX_GAMES_OFF means no upper cap.
 const MAX_GAMES_OFF = 31;  // slider runs 0–30; the top notch means no ceiling
-let minGames = Math.min(+(localStorage.getItem("minRoleGames") ?? 0), MAX_GAMES_OFF - 1);
-let maxGames = +(localStorage.getItem("maxRoleGames") ?? MAX_GAMES_OFF);
+let minGames = Math.round(storedNumber("minRoleGames", 0, 0, MAX_GAMES_OFF));
+let maxGames = Math.max(minGames, Math.round(storedNumber("maxRoleGames", MAX_GAMES_OFF, 0, MAX_GAMES_OFF)));
 const roleGames = (entry, role) => entry?.roles?.[role]?.games || 0;
 const inGamesRange = g => g >= minGames && (maxGames >= MAX_GAMES_OFF || g <= maxGames);
 // Strict role WRs emphasize in-role evidence; off-role games still contribute
@@ -1243,10 +1253,20 @@ const allyLocked = (role, champ) => draftMode && (allyLock.has(role) || liveLock
 // played), and exclusions apply with or without draft mode.
 const FEARLESS_WINDOW_S = 6 * 3600;
 let fearless = localStorage.getItem("fearless") === "1";
-let fearlessSince = +(localStorage.getItem("fearlessSince") || 0); // toggle-on time, for the 24h auto-off
+let fearlessSince = storedNumber("fearlessSince", 0); // toggle-on time, for the 24h auto-off
 // [{id, end, champs: [cid×5] | 0}] — champs present means the game matched a
 // top-10 comp when it was first seen; 0 means evaluated and not a match.
-let fearlessEval = JSON.parse(localStorage.getItem("fearlessEval") || "[]");
+function storedFearlessEval() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("fearlessEval") || "[]");
+    if (!Array.isArray(saved)) return [];
+    return saved.filter(e => e && typeof e.id === "string" && e.id
+      && Number.isFinite(e.end) && e.end >= 0
+      && (e.champs === 0 || (Array.isArray(e.champs) && e.champs.length === 5
+        && new Set(e.champs).size === 5 && e.champs.every(cid => Number.isInteger(cid) && cid > 0))));
+  } catch { return []; }
+}
+let fearlessEval = storedFearlessEval();
 localStorage.removeItem("fearlessPicks"); // pre-comp-matching format
 let fearlessChamps = new Set();
 // Matching compares played games against the lists computed WITHOUT the
@@ -1339,7 +1359,7 @@ function expectedMatchupWR(ours, enemy, role) {
 // guess. A manual lane on the chip collapses this to certainty, and lanes
 // manually claimed by other enemy picks are eliminated before normalizing.
 // raw=true ignores both — the full meta distribution.
-function laneDist(cid, raw = false) {
+function baseLaneDist(cid, raw = false) {
   const manual = enemyRole.get(cid);
   if (manual && !raw) return { [manual]: 1 };
   const m = META && META.champions[cid];
@@ -1382,7 +1402,7 @@ function laneDist(cid, raw = false) {
       if (c === cid) continue;
       const manual = enemyRole.get(c);
       if (manual) { claimed.add(manual); continue; }
-      const rd = laneDist(c, true);
+      const rd = baseLaneDist(c, true);
       const keys = Object.keys(rd);
       if (keys.length === 1 && rd[keys[0]] >= 0.85) claimed.add(keys[0]);
     }
@@ -1393,6 +1413,21 @@ function laneDist(cid, raw = false) {
       if (rest) for (const r in dist) dist[r] /= rest;
     }
   }
+  return dist;
+}
+
+// Enemy role guesses compete for one opponent per lane. Independent flex-pick
+// guesses can otherwise add to more than 100% and multiply the matchup cap.
+// Only reduce excess mass; missing role evidence stays missing. All consumers
+// share these weights, whether or not a particular matchup table has loaded.
+function laneDist(cid, raw = false) {
+  const dist = baseLaneDist(cid, raw);
+  if (raw || !effEnemy().has(cid)) return dist;
+  const totals = {};
+  for (const enemy of effEnemy())
+    for (const [role, weight] of Object.entries(baseLaneDist(enemy)))
+      totals[role] = (totals[role] || 0) + weight;
+  for (const role of Object.keys(dist)) dist[role] /= Math.max(1, totals[role]);
   return dist;
 }
 
@@ -1601,7 +1636,7 @@ function candidates(riotId, role, n = SEARCH_CANDIDATES) {
   const pool=new Map(p.champions.map(c=>[c.championId,c]));
   for(const m of p.mastery)if(!pool.has(m.championId))pool.set(m.championId,null);
   const eligible=[...pool].filter(([cid,entry])=>
-    inMasteryRange(masteryIdx[riotId]?.[cid]||0) && inGamesRange(roleGames(entry,role)) &&
+    D.champions[cid] && inMasteryRange(masteryIdx[riotId]?.[cid]||0) && inGamesRange(roleGames(entry,role)) &&
     (allowUnprovenRoles || roleViable(entry,cid,role)) &&
     !draftUnavailable(cid) && !counterAvoid.has(cid) && !allyTakenElsewhere(cid,role) &&
     !uniqueExclude.has(riotId+'|'+cid));
@@ -1713,7 +1748,8 @@ function previousSlotScore(riotId, cid, role) {
   if(draftMode)for(const enemy of effEnemy()) {
     const rec=matchupRec(enemy,cid,role);if(!rec||rec.play<20)continue;
     const edge=(.5-rec.win/rec.play)*rec.play/(rec.play+50)*MATCHUP_WEIGHT;
-    matchup+=(laneDist(enemy)[role]||0)*Math.max(-MATCHUP_CAP,Math.min(MATCHUP_CAP,edge));
+    // Preserve the historical baseline's independent enemy-role weights.
+    matchup+=(baseLaneDist(enemy)[role]||0)*Math.max(-MATCHUP_CAP,Math.min(MATCHUP_CAP,edge));
   }
   return shrunk(w,g,8,prior)+Math.min(masteryIdx[riotId]?.[cid]||0,200000)/200000*.03
     -(e&&roleShare(e,role)<.25 ? .04 : 0)+ROLE_COMFORT_WEIGHT*(playerRoleShare(riotId,role)-.2)+matchup;
@@ -2199,6 +2235,48 @@ function answersBlock() {
     ${rows.join("")}</div>`;
 }
 
+// A lane lock replaces the previous claimant rather than creating two
+// certain opponents in one lane. When both picks were locked, swap lanes.
+function setEnemyRole(cid, role) {
+  const previous = enemyRole.get(cid);
+  if (!ROLES.includes(role)) { enemyRole.delete(cid); return; }
+  for (const other of effEnemy()) {
+    if (other === cid || enemyRole.get(other) !== role) continue;
+    if (previous && previous !== role) enemyRole.set(other, previous);
+    else enemyRole.delete(other);
+  }
+  enemyRole.set(cid, role);
+}
+
+function addManualEnemy(cid) {
+  if (effBans().has(cid)) return `${champName(cid)} is banned. Remove the ban first.`;
+  if (effEnemy().has(cid)) return `${champName(cid)} is already an enemy pick.`;
+  if (effEnemy().size >= ROLES.length) return "All five enemy picks are set. Remove a pick before adding another.";
+  manualEnemy.add(cid);
+  ensureEnemyCounters(cid);
+  noteEvent("enemy locked " + champName(cid));
+  return null;
+}
+
+function removeManualEnemy(cid) {
+  manualEnemy.delete(cid);
+  if (!liveEnemy.has(cid)) enemyRole.delete(cid);
+  noteEvent(champName(cid) + " pick removed");
+}
+
+// Client picks are authoritative. Manual entries may fill open enemy slots,
+// but must not turn a five-player team into a larger scoring pool.
+function reconcileManualDraft() {
+  let remaining = Math.max(0, ROLES.length - liveEnemy.size);
+  for (const cid of manualEnemy) {
+    if (liveEnemy.has(cid) || liveBans.has(cid) || remaining === 0) {
+      manualEnemy.delete(cid);
+      if (!liveEnemy.has(cid)) enemyRole.delete(cid);
+    } else remaining--;
+  }
+  for (const cid of liveEnemy) manualBans.delete(cid);
+}
+
 function renderDraft() {
   const el = $("#riftCard");
   if (!el) return;
@@ -2235,6 +2313,7 @@ function renderDraft() {
       <span class="dlabel">Enemy</span>
       <input class="dinput" id="enemyInput" list="champdl" aria-label="Add enemy pick" placeholder="add enemy pick…">
     </div>
+    <p class="hint" id="draftInputNotice" role="status" hidden></p>
     ${fearless ? `<div class="draft-row">
       <span class="dlabel">Played</span>
       ${[...fearlessChamps].map(cid => `<span class="dchip dchip-fear"
@@ -2258,8 +2337,16 @@ function renderDraft() {
     const inp = el.querySelector(sel);
     const commit = () => {
       const cid = resolve(inp.value);
-      if (cid == null) return;
-      add(cid);
+      if (!inp.value.trim()) return;
+      const error = cid == null ? "Choose a champion from the list." : add(cid);
+      if (error) {
+        const notice = el.querySelector("#draftInputNotice");
+        notice.textContent = error;
+        notice.hidden = false;
+        inp.setAttribute("aria-invalid", "true");
+        inp.setAttribute("aria-describedby", "draftInputNotice");
+        return;
+      }
       inp.value = "";
       draftChanged();
       el.querySelector(sel).focus();
@@ -2268,14 +2355,11 @@ function renderDraft() {
     inp.addEventListener("keydown", e => { if (e.key === "Enter") commit(); });
   };
   wire("#banInput", cid => {
+    if (effEnemy().has(cid)) return `${champName(cid)} is already an enemy pick. Remove the pick first.`;
     manualBans.add(cid);
     noteEvent(champName(cid) + " banned");
   });
-  wire("#enemyInput", cid => {
-    manualEnemy.add(cid);
-    ensureEnemyCounters(cid);
-    noteEvent("enemy locked " + champName(cid));
-  });
+  wire("#enemyInput", addManualEnemy);
   el.querySelector("#fearlessBtn").addEventListener("click", toggleFearless);
   el.querySelector("#roleLockBtn").addEventListener("click", () => {
     lockRoles = !lockRoles;
@@ -2296,7 +2380,7 @@ function renderDraft() {
   });
   el.querySelectorAll("[data-remove]").forEach(b => b.addEventListener("click", () => {
     const [kind, cid] = b.dataset.remove.split(":");
-    (kind === "ban" ? manualBans : manualEnemy).delete(+cid);
+    if (kind === "ban") manualBans.delete(+cid); else removeManualEnemy(+cid);
     noteEvent(champName(+cid) + (kind === "ban" ? " ban removed" : " pick removed"));
     draftChanged();
   }));
@@ -2310,8 +2394,10 @@ function wireAnswers(el) {
     slots[i].champ = cid;
     allyLock.set(ROLES[i], cid);  // an answer chosen mid-draft is a lock, like a hand pick
     noteEvent("picked " + champName(cid));
-    rankedTabs.assigned = null;
+    const hadResults = !!rankedTabs[activeTab];
+    rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
     candCache = {};  // a lock changes what the other four may pick
+    if (activeTab === "assigned" || hadResults) switchTab(activeTab);
     renderDraft(); renderSlots(); renderScore();
   }));
 }
@@ -2510,20 +2596,7 @@ function wireRiftDrag(m) {
         if (ev.pointerId !== e.pointerId) return;
         unbind();
         if (moved && target != null && target !== src) {
-          [slots[src], slots[target]] = [slots[target], slots[src]];
-          // Locks travel with the pins they belong to — a swap moves the whole
-          // pairing, so leaving the lock on the old role would pin a champion
-          // to a lane nobody is playing it in.
-          const [ra, rb] = [ROLES[src], ROLES[target]];
-          const [la, lb] = [allyLock.get(ra), allyLock.get(rb)];
-          allyLock.delete(ra); allyLock.delete(rb);
-          if (lb != null) allyLock.set(ra, lb);
-          if (la != null) allyLock.set(rb, la);
-          autoSwapNote = null;  // the user is steering again
-          rankedTabs.assigned = null;  // role assignment changed — stale
-          if (activeTab === "assigned") switchTab("assigned");
-          candCache = {};  // locks moved — so did what the others may pick
-          renderSlots(); renderScore();
+          swapRoleSlots(src, target);
         } else {
           renderRift();  // snap back
           if (!moved) openAllyPop(src);
@@ -2534,6 +2607,22 @@ function wireRiftDrag(m) {
       window.addEventListener("pointercancel", onCancel);
     });
   });
+}
+
+function swapRoleSlots(src, target) {
+  [slots[src], slots[target]] = [slots[target], slots[src]];
+  // The whole player/champion pairing moves, including any manual lock.
+  const [ra, rb] = [ROLES[src], ROLES[target]];
+  const [la, lb] = [allyLock.get(ra), allyLock.get(rb)];
+  allyLock.delete(ra); allyLock.delete(rb);
+  if (lb != null) allyLock.set(ra, lb);
+  if (la != null) allyLock.set(rb, la);
+  autoSwapNote = null;
+  const hadResults = !!rankedTabs[activeTab];
+  rankedTabs.assigned = rankedTabs.overall = rankedTabs.worst = null;
+  candCache = {};  // clear before searching: the locks changed candidate pools
+  if (activeTab === "assigned" || hadResults) switchTab(activeTab);
+  renderSlots(); renderScore();
 }
 
 // Anchor a popover at a pin, opening toward the map's centre so it never
@@ -2616,13 +2705,13 @@ function openRiftPop(cid, pinEl) {
     ${manualEnemy.has(cid) && !live ? `<button type="button" class="btn toggle" data-pop-remove>Remove pick</button>` : ""}`;
   m.appendChild(pop);
   pop.querySelector("[data-erole]").addEventListener("change", e => {
-    enemyRole.set(cid, e.target.value || null);
+    setEnemyRole(cid, e.target.value);
     ensureEnemyCounters(cid);
     draftChanged();
   });
   const rm = pop.querySelector("[data-pop-remove]");
   if (rm) rm.addEventListener("click", () => {
-    manualEnemy.delete(cid);
+    removeManualEnemy(cid);
     draftChanged();
   });
   const close = ev => {
@@ -2772,7 +2861,12 @@ function riotIdForLive(riotId) {
 }
 
 function applyLiveDraft(j) {
-  if (!j || !j.ts || (j.ts === liveDraft.ts && j.evaluation?.updatedAt === liveDraft.evaluation?.updatedAt)) { updateLiveIndicator(); return; }
+  // A polling response can arrive after a newer WebSocket update or after
+  // draft mode was disabled. Neither should rewind the board or its locks.
+  if (!draftMode || !j || !Number.isFinite(j.ts) || j.ts <= 0 || j.ts < liveDraft.ts
+      || (j.ts === liveDraft.ts && (j.evaluation?.updatedAt || 0) <= (liveDraft.evaluation?.updatedAt || 0))) {
+    updateLiveIndicator(); return;
+  }
   const wasActive = liveDraft.active;
   // Name what just landed before the sets are replaced — the win ticker's
   // delta chip and trend tooltips attribute the move to it.
@@ -2789,6 +2883,7 @@ function applyLiveDraft(j) {
   liveDraft = j;
   liveBans = new Set(j.active ? j.bans || [] : []);
   liveEnemy = new Set(j.active ? j.enemy || [] : []);
+  reconcileManualDraft();
   liveOurs = j.active ? j.ours || [] : [];
   if (!j.active) {
     counterAvoid.clear(); counterDismissed.clear();  // per-draft decisions
@@ -3328,10 +3423,10 @@ function renderScore() {
     (autoSwapNote
       ? `<b style="color:var(--warning)">${autoSwapNote}</b><br>`
       : "") +
-    `Individual baseline: <b>${scoreText(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
+    `Average slot score: <b>${scoreText(sc.ind)}</b><span class="info" tabindex="0">i<span class="tip">` +
     `Average of the five slot scores: each player's win rate on their champion in that role ` +
     `(shrunk toward the champ's current-patch meta WR), plus sample-shrunk role comfort, ` +
-    `minus off-role penalties. "How good are these five picks in isolation?"</span></span><br>` +
+    `minus off-role penalties, plus known draft matchup residuals.</span></span><br>` +
     `Shared-win synergy: <b>not added to score</b><span class="info" tabindex="0">i<span class="tip">`+
     `Shared wins already contribute to individual records. Adding champion-pair and player-pair bonuses `+
     `would count those same team results again. Pair statistics remain historical context only.</span></span>`;
@@ -3538,7 +3633,8 @@ function renderProfilePane() {
   const champHead = [["champ", "Champ"], ["games", "Games"], ["wr", "Win rate"],
     ["kda", "KDA"], ["csm", "CS/m"], ["dpm", "DPM"], ["meta", "Meta WR"]].map(([k, label]) =>
     `<th class="sortable${pfSort.key === k && pfSort.dir ? " sorted" : ""}" data-sort="${k}"
-      title="Click to sort">${label}${pfSort.key === k && pfSort.dir ? (pfSort.dir === 1 ? " ▼" : " ▲") : ""}${k === "meta" ? metaInfo : ""}</th>`).join("");
+      aria-sort="${pfSort.key === k && pfSort.dir ? ((k === "champ") === (pfSort.dir === 1) ? "ascending" : "descending") : "none"}"
+      title="Click to sort"><button type="button" class="table-action" data-sort-button="${k}" aria-label="Sort by ${label}">${label}${pfSort.key === k && pfSort.dir ? (pfSort.dir === 1 ? " ▼" : " ▲") : ""}</button>${k === "meta" ? metaInfo : ""}</th>`).join("");
   const champRows = champs.slice(0, 10).map(e => {
     const wr = e.wins / e.games;
     const role = mainRole(e);
@@ -3636,6 +3732,7 @@ function renderProfilePane() {
       ? { key: k, dir: pfSort.dir === 1 ? -1 : pfSort.dir === -1 ? 0 : 1 }
       : { key: k, dir: 1 };
     renderProfilePane();
+    document.querySelector(`[data-sort-button="${k}"]`)?.focus();
   }));
 }
 
@@ -3704,7 +3801,8 @@ function renderHistoryPane() {
     const open = mhOpen.has(g.id);
     const icons = byLane(g.us).map(r =>
       `<span class="ci" data-tip="${esc(r.rid.split("#")[0])} · ${r.k}/${r.d}/${r.a}"><img src="${champIcon(r.champ)}" alt="${champName(r.champ)}"></span>`).join("");
-    return `<div class="mh-row ${remake ? "remake" : g.win ? "win" : "loss"}${open ? " open" : ""}" data-mh="${g.id}"
+    return `<div class="mh-row ${remake ? "remake" : g.win ? "win" : "loss"}${open ? " open" : ""}" data-mh="${g.id}" role="button" tabindex="0" aria-expanded="${open}"
+        aria-label="${open ? "Hide" : "Show"} scoreboard for ${esc(g.id)}"
         title="Click for the full scoreboard">
       <span class="res">${remake ? "—" : g.win ? "W" : "L"}</span>
       <span class="mq">${QUEUE_NAME[String(g.q)] || "Queue " + g.q}${remake ? ` <span class="dim">remake</span>` : ""}</span>
@@ -3718,11 +3816,18 @@ function renderHistoryPane() {
     ? `<button class="btn" id="mhMore" style="margin-top:6px">Show ${Math.min(MH_SHOW_STEP, games.length - mhShow)} more of ${games.length - mhShow}</button>`
     : "";
   $("#ranked").innerHTML = sum + rows + more;
-  document.querySelectorAll("[data-mh]").forEach(el => el.addEventListener("click", () => {
-    const id = el.dataset.mh;
-    mhOpen.has(id) ? mhOpen.delete(id) : mhOpen.add(id);
-    renderHistoryPane();
-  }));
+  document.querySelectorAll("[data-mh]").forEach(el => {
+    const toggle = () => {
+      const id = el.dataset.mh;
+      mhOpen.has(id) ? mhOpen.delete(id) : mhOpen.add(id);
+      renderHistoryPane();
+      [...document.querySelectorAll("[data-mh]")].find(row => row.dataset.mh === id)?.focus();
+    };
+    el.addEventListener("click", toggle);
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+    });
+  });
   const moreBtn = $("#mhMore");
   if (moreBtn) moreBtn.addEventListener("click", () => { mhShow += MH_SHOW_STEP; renderHistoryPane(); });
 }
@@ -3798,14 +3903,14 @@ function renderBoardPane() {
     ["kp", "KP", "Average kill participation — flex five-stacks only"],
   ];
   const head = COLS.map(([k, label, tip]) =>
-    `<th class="sortable${lbSort.key === k ? " sorted" : ""}" data-lbsort="${k}" title="${tip}">
-      ${label}${lbSort.key === k ? (lbSort.dir === 1 ? " ▼" : " ▲") : ""}</th>`).join("");
+    `<th class="sortable${lbSort.key === k ? " sorted" : ""}" data-lbsort="${k}" title="${tip}" aria-sort="${lbSort.key === k ? ((k === "player") === (lbSort.dir === 1) ? "ascending" : "descending") : "none"}">
+      <button type="button" class="table-action" data-lbsort-button="${k}" aria-label="Sort by ${label}">${label}${lbSort.key === k ? (lbSort.dir === 1 ? " ▼" : " ▲") : ""}</button></th>`).join("");
   const dash = `<span class="dim">—</span>`;
   const body = rows.map((r, i) => {
     const wr = val.wr(r), kda = val.kda(r);
     return `<tr data-lb="${r.rid}" title="Open ${esc(r.rid.split("#")[0])}'s profile">
       <td><span class="lb-rank ${i === 0 ? "g" : i === 1 ? "s" : i === 2 ? "b" : ""}">${i + 1}</span></td>
-      <td><span class="lb-player">${avatar(r.rid)}${esc(r.rid.split("#")[0])}</span></td>
+      <td><button type="button" class="table-action lb-player" aria-label="Open ${esc(r.rid.split("#")[0])}'s profile">${avatar(r.rid)}${esc(r.rid.split("#")[0])}</button></td>
       <td>${r.t.games}g</td>
       <td>${wr != null ? `<div class="wr-cell"><b>${pct(wr)}</b><div class="wr-bar"><div style="width:${wr * 100}%"></div></div></div>` : dash}</td>
       <td>${kda != null ? kda.toFixed(2) : dash}</td>
@@ -3835,6 +3940,7 @@ function renderBoardPane() {
     const k = th.dataset.lbsort;
     lbSort = lbSort.key === k ? { key: k, dir: -lbSort.dir } : { key: k, dir: 1 };
     renderBoardPane();
+    document.querySelector(`[data-lbsort-button="${k}"]`)?.focus();
   }));
   document.querySelectorAll("[data-lbrole]").forEach(b => b.addEventListener("click", () => {
     const r = b.dataset.lbrole;
@@ -3867,6 +3973,7 @@ const RANKED_TOP = 10;
 let uniqueComps = localStorage.getItem("uniqueComps") === "1";
 let uniqueExclude = new Set();  // "riotId|championId" pairs shown higher up the unique list
 function uniqueList(tab, results) {
+  if (!results?.length) return [];
   const { fixed, pinPlayer } = lockPins();
   const out = [results[0]];
   try {
@@ -4024,7 +4131,7 @@ function renderRanked(results) {
     <th>Comp</th></tr>
     ${results.map((r, i) => `
       <tr class="comp-row" data-i="${i}" style="--i:${i}" title="Click to load into the builder">
-        <td><span class="rank ${i === 0 && activeTab === "worst" ? "rneg" : i < 3 ? "r" + (i + 1) : ""}">${i + 1}</span></td>
+        <td><button type="button" class="table-action rank ${i === 0 && activeTab === "worst" ? "rneg" : i < 3 ? "r" + (i + 1) : ""}" aria-label="Load composition ${i + 1}, score ${scoreText(r.total)}">${i + 1}</button></td>
         <td><div class="wr-cell"><b>${scoreText(r.total)}</b><div class="wr-bar"><div style="width:${r.total * 100}%"></div></div></div></td>
         <td class="champ-icons">${r.assign.map(a =>
           `<span class="ci" data-tip="${a.player.split("#")[0]} · ${ROLE_LABEL[a.role]}"><img src="${champIcon(a.champ)}" alt="${champName(a.champ)}"></span>`).join("")}</td>
@@ -4298,17 +4405,26 @@ function renderChips() {
   $("#sub").innerHTML = chips.map(c => `<span class="chip">${c}</span>`).join("");
 }
 
+async function requestJSON(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return { ok: response.ok, status: response.status, data: await response.json() };
+  } finally { clearTimeout(timeout); }
+}
+
 async function loadLive() {
   if (!WORKER_URL) return null;
   try {
-    const r = await fetch(WORKER_URL + "/data");
-    const j = r.ok ? await r.json() : null;
+    const r = await requestJSON(WORKER_URL + "/data");
+    const j = r.ok ? r.data : null;
     return j && j.players ? j : null;
   } catch { return null; }
 }
 
 async function loadStatic() {
-  const get = f => fetch("data/" + f, { cache: "no-cache" }).then(r => r.ok ? r.json() : null).catch(() => null);
+  const get = f => requestJSON("data/" + f, { cache: "no-cache" }).then(r => r.ok ? r.data : null).catch(() => null);
   const [players, meta, profiles] = await Promise.all(
     [get("players.json"), get("meta.json"), get("profiles.json")]);
   return players ? { players, meta, profiles } : null;
@@ -4330,8 +4446,8 @@ async function doRefresh(silent = false) {
     // trapping the UI. The worker persists pending work for the next click.
     let added = 0, res = {}, calls = 0;
     do {
-      const response = await fetch(WORKER_URL + "/refresh", { method: "POST" });
-      res = await response.json(); calls++;
+      const response = await requestJSON(WORKER_URL + "/refresh", { method: "POST" }, 20000);
+      res = response.data; calls++;
       added += res.added || 0;
       if (!response.ok || res.error || res.retryAfterMs || res.retryAfter) break;
     } while (res.remaining > 0 && calls < 8);

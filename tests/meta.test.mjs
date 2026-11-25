@@ -111,6 +111,28 @@ test('failed meta fetch preserves the last successful metadata and timestamp', a
   assert.deepEqual(JSON.parse(values.get('data')).meta, state.meta);
 });
 
+test('asynchronous upstream failures return structured errors with CORS', async t => {
+  const { env } = fixture();
+  const champion = rawMeta.data.find(c => c.positions.length);
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('upstream unavailable'); });
+  const counters = await worker.fetch(new Request(
+    `https://compy.example/counters?champ=${champion.id}&pos=${champion.positions[0].name}`), env);
+  assert.equal(counters.status, 500);
+  assert.deepEqual(await counters.json(), { error: 'upstream unavailable' });
+  assert.equal(counters.headers.get('access-control-allow-origin'), '*');
+
+  const failingBinding = { idFromName: name => name, get: () => ({
+    async fetch() { throw new Error('durable object unavailable'); },
+  }) };
+  for (const [path, binding] of [['/data', 'STATE'], ['/draft', 'DRAFT']]) {
+    const result = await worker.fetch(new Request(`https://compy.example${path}`),
+      { ...env, [binding]: failingBinding });
+    assert.equal(result.status, 500);
+    assert.deepEqual(await result.json(), { error: 'durable object unavailable' });
+    assert.equal(result.headers.get('access-control-allow-origin'), '*');
+  }
+});
+
 test('counter requests and cache entries are isolated by tier and patch', async t => {
   const { env, values, writes, state } = fixture();
   const champion = rawMeta.data.find(c => c.positions.length);

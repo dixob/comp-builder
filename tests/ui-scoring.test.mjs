@@ -38,10 +38,91 @@ test('matchup expectation is neutral for equal champions and symmetric for actua
   const sum=run(c,`expectedMatchupWR(${ids[i]},${ids[i-1]},'${role}')+expectedMatchupWR(${ids[i-1]},${ids[i]},'${role}')`);assert(Math.abs(sum-1)<1e-12);
  }
 });
+test('recorded enemy drafts never assign more than one opponent of probability to a lane',()=>{
+ const c=context();run(c,'draftMode=true;');
+ const drafts=run(c,`D.stacks.map(stack=>{
+  manualEnemy=new Set(stack.them.map(p=>p.champ));
+  const base=[...manualEnemy].map(cid=>baseLaneDist(cid));
+  const effective=[...manualEnemy].map(cid=>laneDist(cid));
+  return {base,effective,sums:ROLES.map(role=>effective.reduce((n,d)=>n+(d[role]||0),0)),
+   baseSums:ROLES.map(role=>base.reduce((n,d)=>n+(d[role]||0),0))};
+ })`);
+ assert(drafts.length>0);assert(drafts.some(d=>d.baseSums.some(n=>n>1.1)),'Recorded drafts must exercise overlapping role guesses');
+ for(const draft of drafts) {
+  for(const mass of draft.sums)assert(mass<=1+1e-12&&mass>=0);
+  draft.effective.forEach((dist,i)=>{
+   assert(Object.values(dist).reduce((a,b)=>a+b,0)<=1+1e-12);
+   for(const [role,weight]of Object.entries(dist))assert(weight<=draft.base[i][role]+1e-12,'Normalization must not invent missing role evidence');
+  });
+ }
+});
+test('single enemy distributions and explicit unique role assignments retain their evidence',()=>{
+ const c=context();run(c,'draftMode=true;');
+ const singles=run(c,`Object.keys(META.champions).map(Number).map(cid=>{
+  manualEnemy=new Set([cid]);return {raw:laneDist(cid,true),effective:laneDist(cid)};
+ })`);
+ for(const row of singles)assert.deepEqual(row.effective,row.raw);
+ const assigned=run(c,`(()=>{
+  const opponents=D.stacks.find(s=>s.them.length===5&&new Set(s.them.map(p=>p.role)).size===5).them;
+  manualEnemy=new Set(opponents.map(p=>p.champ));
+  const raw=opponents.map(p=>laneDist(p.champ,true));
+  enemyRole=new Map(opponents.map(p=>[p.champ,p.role]));
+  return opponents.map((p,i)=>({role:p.role,dist:laneDist(p.champ),raw:laneDist(p.champ,true),before:raw[i]}));
+ })()`);
+ for(const row of assigned) {
+  assert.deepEqual({...row.dist},{[row.role]:1});assert.deepEqual(row.raw,row.before);
+ }
+ run(c,'enemyRole=new Map().set([...manualEnemy][0],"TOP");');
+ assert(run(c,'[...manualEnemy].slice(1).every(cid=>!laneDist(cid).TOP)'));
+});
+test('draft residual stays within its lane cap and missing tables do not redistribute enemy weights',()=>{
+ const c=context();run(c,'draftMode=true;');
+ // Recorded outcome counts are only projected into a transport shape here;
+ // these tables do not claim that the historical games were lane matchups.
+ const result=run(c,`(()=>{
+  const stack=D.stacks.find(s=>{
+   manualEnemy=new Set(s.them.map(p=>p.champ));
+   return ROLES.some(role=>[...manualEnemy].reduce((sum,cid)=>sum+(baseLaneDist(cid)[role]||0),0)>2);
+  });
+  const counts=D.players.flatMap(p=>p.champions).filter(ch=>ch.games>=20);
+  counterIdx=Object.fromEntries([...manualEnemy].flatMap(enemy=>ROLES.map(role=>[enemy+'|'+OPGG_POS[role],
+   Object.fromEntries(counts.map(ch=>[ch.championId,{play:ch.games,win:ch.wins}]))])));
+  const weights=[...manualEnemy].map(cid=>laneDist(cid));
+  const adjustments=counts.flatMap(ch=>ROLES.map(role=>dAdj(ch.championId,role)));
+  counterIdx={};dAdjCache={};
+  return {stack:stack.id,weights,without:[...manualEnemy].map(cid=>laneDist(cid)),adjustments,
+   empty:counts.flatMap(ch=>ROLES.map(role=>dAdj(ch.championId,role)))};
+ })()`);
+ assert(result.stack);assert(result.adjustments.some(n=>n!==0));
+ for(const value of result.adjustments)assert(Math.abs(value)<=.03+1e-12);
+ assert.deepEqual(result.weights,result.without);assert(result.empty.every(n=>n===0));
+});
+test('the previous-model shadow retains its historical lane inference after normalization',()=>{
+ const current=context();
+ const previous=context(source.replace('function laneDist(cid, raw = false) {',
+  'function laneDist(cid, raw = false) { return baseLaneDist(cid, raw);'));
+ const probe=`(()=>{
+  draftMode=true;
+  D.stacks.find(s=>{
+   manualEnemy=new Set(s.them.map(p=>p.champ));
+   return ROLES.some(role=>[...manualEnemy].reduce((sum,cid)=>sum+(baseLaneDist(cid)[role]||0),0)>2);
+  });
+  // Project existing recorded counts mechanically; no historical matchup claim.
+  const counts=D.players.flatMap(p=>p.champions).filter(ch=>ch.games>=20);
+  counterIdx=Object.fromEntries([...manualEnemy].flatMap(enemy=>ROLES.map(role=>[enemy+'|'+OPGG_POS[role],
+   Object.fromEntries(counts.map(ch=>[ch.championId,{play:ch.games,win:ch.wins}]))])));
+  return D.players.flatMap(p=>p.champions.filter(ch=>ch.games>=20).slice(0,2)
+   .flatMap(ch=>ROLES.map(role=>({previous:previousSlotScore(p.riotId,ch.championId,role),
+    current:slotScore(p.riotId,ch.championId,role)}))));
+ })()`;
+ const after=run(current,probe),before=run(previous,probe);
+ assert(after.length>0);assert(after.some((row,i)=>row.current!==before[i].current));
+ after.forEach((row,i)=>assert.equal(row.previous,before[i].previous));
+});
 test('local prospective records capture chosen comp and pregame ablations without outcomes',()=>{
  const c=context();run(c,`slots=D.players.slice(0,5).map(p=>({player:p.riotId,champ:null}));`);
  const record=run(c,`predictionRecord(optimizeChamps(1)[0].assign)`);
- assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.5');
+ assert.equal(record.comp.length,5);assert.equal(record.evidence.length,5);assert.equal(record.modelVersion,'2026-11-24.6');
  assert(!('outcome'in record));assert(!('win'in record));assert.equal(record.scores.noMastery,record.scores.current);
  for(const value of Object.values(record.scores))assert(value>=.05&&value<=.95);
  assert(record.comp.every(p=>p.puuid&&p.puuidHistory.includes(p.puuid)));
@@ -272,7 +353,7 @@ test('manual picker and optimizer expose the same complete filtered pool',()=>{
      const entry=p.champions.find(ch=>ch.championId===cid),role=['TOP','JUNGLE','MIDDLE','BOTTOM','UTILITY'][i];
      const pos=meta.champions[cid]?.positions?.[['TOP','JUNGLE','MID','ADC','SUPPORT'][i]];
      const supported=(entry?.roles?.[role]?.games||0)>=10||(pos?.games>=100&&pos?.roleRate>=.10);
-     return (p.mastery.find(m=>m.championId===cid)?.points||0)>=30000&&(allow||supported);
+     return !!players.champions[cid]&&(p.mastery.find(m=>m.championId===cid)?.points||0)>=30000&&(allow||supported);
     }).sort((a,b)=>a-b);
    assert.deepEqual(shown,expected,'Only the visible role-evidence rule and filters restrict the shared pool');
    for(const cid of shown){
@@ -284,6 +365,25 @@ test('manual picker and optimizer expose the same complete filtered pool',()=>{
   }
  }
  assert(lowSample>0&&offMeta>0&&masteryBeyondTwelve>0);
+});
+
+test('unproven roles never admit recorded mastery IDs absent from the champion catalog',()=>{
+ const c=context(),container={innerHTML:''};
+ c.document.querySelector=selector=>selector==='#slots'?container:null;
+ c.document.querySelectorAll=()=>[];
+ const absent=players.players.flatMap(p=>p.mastery.filter(m=>!players.champions[m.championId]));
+ assert(absent.length>0,'Recorded mastery must contain uncataloged game-mode variants');
+ run(c,'renderRift=()=>{};allowUnprovenRoles=true;masteryMin=0;candCache={};');
+ for(const player of players.players) {
+  c.playerId=player.riotId;
+  const ids=run(c,'ROLES.flatMap(role=>candidates(playerId,role))');
+  assert(ids.length>0);assert(ids.every(cid=>players.champions[cid]));
+  run(c,'slots=ROLES.map(()=>({player:playerId,champ:null}));renderSlots();');
+  for(const entry of absent)assert(!container.innerHTML.includes(`value="${entry.championId}"`));
+ }
+ const results=run(c,'optimize(3)');
+ assert.equal(results.length,3);
+ for(const result of results)assert(result.assign.every(a=>players.champions[a.champ]));
 });
 
 test('SecondComing Xerath and Thresh top require an explicit unproven-role opt-in',()=>{
@@ -342,7 +442,7 @@ test('automatic evaluation still records actual unsupported draft picks',()=>{
  assert.equal(record.settings.allowUnprovenRoles,false);
  assert.equal(record.comp[0].championId,412);
  assert.equal(record.evidence[0].roleSupported,false);
- assert.equal(record.modelVersion,'2026-11-24.5');
+ assert.equal(record.modelVersion,'2026-11-24.6');
 });
 
 test('repeated pair aggregates cannot change production scores or optimized picks',()=>{
@@ -397,6 +497,27 @@ test('manual draft changes invalidate cached options before refreshing ranked re
  run(c,`for(const [i,role]of ROLES.entries())allyLock.set(role,slots[i].champ);candCache={};`);
  const results=run(c,`optimizeChamps(1,lockPins().fixed)`);assert.equal(results.length,1);c.results=results;
  assert.equal(run(c,`uniqueList('assigned',results).length`),1);
+});
+
+test('Best answers refreshes every cached search under the newly selected pick lock',()=>{
+ for(const tab of ['assigned','overall','worst']) {
+  const c=context();setRecordedBoard(c);let click;
+  run(c,`draftMode=true;activeTab='${tab}';renderDraft=()=>{};renderSlots=()=>{};renderScore=()=>{};renderTabs=()=>{};
+   rankedTabs.assigned=optimizeChamps(3);rankedTabs.overall=optimize(3);rankedTabs.worst=optimizeWorst(3);
+   replacement=replacementRecommendations(board,'TOP')[0].cid;`);
+  c.answerContainer={querySelectorAll(){return [{dataset:{answer:'0:'+run(c,'replacement')},
+   addEventListener(event,handler){click=handler;}}];}};
+  run(c,'wireAnswers(answerContainer)');
+  assert.equal(typeof click,'function');click();
+  assert.equal(run(c,"allyLock.get('TOP')"),run(c,'replacement'));
+  assert(run(c,`rankedTabs[activeTab].length>0&&rankedTabs[activeTab].every(r=>
+   r.assign[0].champ===replacement&&r.assign[0].player===slots[0].player
+   &&!r.assign.slice(1).some(a=>a.champ===replacement))`));
+  for(const other of ['assigned','overall','worst'].filter(value=>value!==tab))
+   assert.equal(run(c,`rankedTabs.${other}`),null,'Hidden search results must be invalidated');
+  run(c,'applyComp(rankedTabs[activeTab][0])');
+  assert.equal(run(c,'slots[0].champ'),run(c,'replacement'),'Applying a refreshed result preserves the answer lock');
+ }
 });
 
 // Explicit benchmark mode uses only recorded roster data and real settings.

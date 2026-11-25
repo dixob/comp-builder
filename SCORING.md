@@ -4,11 +4,15 @@ Compy ranks candidate compositions with a **score out of 100**. It does not
 estimate a calibrated match-win probability. Historical player and meta win
 rates remain percentages; score adjustments are displayed as points.
 
-The current model is `2026-11-24.5`, implemented in the scoring section of
+The current model is `2026-11-24.6`, implemented in the scoring section of
 [index.html](index.html). The [review](SCORING_REVIEW.md) records the original
 audit; [EVALUATION.md](EVALUATION.md) explains how to test predictions against
 future outcomes. The current coefficients are conservative heuristics, not
 learned or validated accuracy improvements.
+
+Version `.6` caps the combined enemy probability for each lane at 100%, so
+overlapping flex-pick guesses cannot multiply that lane's matchup adjustment.
+The score, advisories and displayed lane probabilities use the same weights.
 
 Version `.5` requires role evidence by default in both manual selection and
 optimization. Unsupported roles require the visible **Allow unproven roles**
@@ -119,6 +123,18 @@ residual = (observedWinRateAgainstEnemy − expected) × games / (games + 50)
 adjustment += laneProbability × clamp(residual, −0.03, +0.03)
 ```
 
+Each enemy's initial lane distribution incorporates role-meta evidence,
+personal role coverage and known lane claims. For each lane, divide these
+weights by `max(1, sum of all enemy weights for that lane)`. This prevents
+multiple flex-pick guesses from implying more than one opponent in a lane.
+The denominator includes every enemy pick, including those without a loaded
+matchup table. Missing probability mass is not filled in. A unique manual role
+assignment remains certain and excludes that lane from the other enemies.
+The combined slot adjustment is therefore bounded at ±3 points. This is a
+conservative consistency constraint, not a fitted joint role-assignment model.
+The `previous` pre-review comparison retains its historical independent lane
+weights; the consistency cap applies to production and its current ablations.
+
 The expectation uses the difference in standalone champion log odds. It
 centers matchup effects on baseline strength instead of counting every
 above-50% matchup as an extra advantage. This is still a heuristic rather
@@ -174,6 +190,8 @@ Mastery and role-game ranges, bans and draft exclusions are hard candidate
 filters. Manual selection, full search, assigned-role search, worst search and
 single-swap recommendations share the same pool: the union of every champion
 in the player's history and mastery data, filtered by the active constraints.
+Entries absent from the loaded champion catalog are excluded, including
+game-mode variant mastery IDs that cannot be selected in the ranked draft.
 There is no eight-pick cap, 15-pick comparison cap, mastery-list cutoff, or
 five-game preference that hides otherwise eligible choices.
 

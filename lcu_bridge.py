@@ -148,6 +148,18 @@ def post_draft(worker_url, token, payload):
         raise
 
 
+def sync_draft(worker_url, token, payload):
+    """Keep a remote sync failure separate from the local League connection."""
+    try:
+        result = post_draft(worker_url, token, payload)
+        if not isinstance(result, dict) or not (result.get("ok") is True or result.get("ignored") is True):
+            raise ValueError("invalid worker response")
+        return result
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as e:
+        print(f"Draft sync failed ({e}); retrying...")
+        return None
+
+
 def main():
     cfg = json.loads((ROOT / "config.json").read_text())
     worker_url = cfg.get("worker_url")
@@ -182,7 +194,10 @@ def main():
             # on the heartbeat, so if that bridge dies mid-draft this one takes
             # over as soon as the worker lets go of the stale owner.
             if payload != last_sent or time.time() - last_post > HEARTBEAT_S:
-                res = post_draft(worker_url, token, payload)
+                res = sync_draft(worker_url, token, payload)
+                if res is None:
+                    time.sleep(POLL_S)
+                    continue
                 last_sent, last_post = payload, time.time()
                 if res.get("ignored"):
                     if not yielded:
@@ -200,15 +215,19 @@ def main():
             if in_session:
                 print("Champ select ended.")
                 if not yielded:
-                    post_draft(worker_url, token, {"active": False, "owner": me})
+                    res = sync_draft(worker_url, token, {"active": False, "owner": me})
+                    if res is None:
+                        # Retain in_session so the next 404 retries the close.
+                        time.sleep(SESSION_WAIT_S)
+                        continue
                 in_session = False
                 last_sent = None
                 last_post = 0.0
             time.sleep(SESSION_WAIT_S)
-        except RuntimeError as e:
+        except (RuntimeError, ValueError) as e:
             print(f"{e}, retrying...")
             time.sleep(POLL_S)
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
             print("League client gone; waiting for it to come back...")
             lcu.close()
             in_session = False
